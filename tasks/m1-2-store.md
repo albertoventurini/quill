@@ -73,8 +73,8 @@ Run via `./test.sh`.
 ## Acceptance criteria
 - [ ] `./test.sh` passes.
 - [ ] `./run.sh` boots the app and creates `~/.local/share/com.alberto.quill/quill.sqlite` with the `connections` table.
-- [ ] No Tauri commands exposed yet.
-- [ ] Style follows AGENTS.md (rustfmt, clippy clean, comments only where the *why* is non-obvious).
+- [x] No Tauri commands exposed yet.
+- [x] Style follows AGENTS.md (rustfmt, clippy clean, comments only where the *why* is non-obvious).
 
 ## Out of scope
 - Other tables (`schema_cache`, `query_history`, `saved_queries`) — later milestones.
