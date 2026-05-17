@@ -1,5 +1,7 @@
-mod slots;
-mod store;
+pub mod pg;
+pub mod registry;
+pub mod slots;
+pub mod store;
 
 use tauri::Manager;
 
@@ -17,6 +19,7 @@ pub fn run() {
             let handle = app.handle();
             let pool = tauri::async_runtime::block_on(store::open(handle))?;
             app.manage(pool);
+            app.manage(registry::ServerRegistry::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![greet])

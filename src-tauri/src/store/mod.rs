@@ -60,10 +60,7 @@ pub struct NewConnection {
 pub async fn open(app: &tauri::AppHandle) -> Result<SqlitePool, StoreError> {
     use tauri::Manager;
 
-    let app_dir = app
-        .path()
-        .app_data_dir()
-        .map_err(std::io::Error::other)?;
+    let app_dir = app.path().app_data_dir().map_err(std::io::Error::other)?;
     std::fs::create_dir_all(&app_dir)?;
 
     let db_path = app_dir.join("quill.sqlite");
@@ -112,10 +109,7 @@ pub async fn get(pool: &SqlitePool, id: i64) -> Result<Option<Connection>, Store
 }
 
 /// Insert a new connection and return the full row (with auto-generated id/created_at).
-pub async fn insert(
-    pool: &SqlitePool,
-    c: NewConnection,
-) -> Result<Connection, StoreError> {
+pub async fn insert(pool: &SqlitePool, c: NewConnection) -> Result<Connection, StoreError> {
     // We use RETURNING so the full row is returned in one round-trip.
     // SQLite 3.35+; all modern systems ship a recent enough SQLite.
     Ok(sqlx::query_as::<_, Connection>(
@@ -194,7 +188,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(row.is_some(), "connections table should exist after migration");
+        assert!(
+            row.is_some(),
+            "connections table should exist after migration"
+        );
     }
 
     #[tokio::test]

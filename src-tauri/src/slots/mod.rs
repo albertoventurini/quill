@@ -16,8 +16,8 @@
 //! - No keepalives, no background tasks, no pre-fetching (AGENTS.md principle 1).
 
 use std::ops::Deref;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
 
 use async_trait::async_trait;
@@ -159,6 +159,14 @@ impl<C: Connector> Deref for SlotGuard<'_, C> {
     fn deref(&self) -> &C::Conn {
         self.conn
             .as_ref()
+            .expect("SlotGuard always holds a connection")
+    }
+}
+
+impl<C: Connector> std::ops::DerefMut for SlotGuard<'_, C> {
+    fn deref_mut(&mut self) -> &mut C::Conn {
+        self.conn
+            .as_mut()
             .expect("SlotGuard always holds a connection")
     }
 }
@@ -348,9 +356,7 @@ impl<C: Connector> SlotManager<C> {
                     SlotInfo {
                         database: s.database.clone().unwrap_or_default(),
                         busy: s.busy,
-                        last_used: now
-                            .checked_sub(elapsed)
-                            .unwrap_or(SystemTime::UNIX_EPOCH),
+                        last_used: now.checked_sub(elapsed).unwrap_or(SystemTime::UNIX_EPOCH),
                     }
                 })
                 .collect(),
@@ -442,11 +448,13 @@ fn apply_rules<C: Connector>(
     let mut best_idx = None;
     let mut best_last_used = Instant::now(); // placeholder, overwritten
     for (i, slot) in slots.iter().enumerate() {
-        if !slot.busy && slot.conn.is_some() && slot.database.as_deref() != Some(database) {
-            if best_idx.is_none() || slot.last_used < best_last_used {
-                best_idx = Some(i);
-                best_last_used = slot.last_used;
-            }
+        if !slot.busy
+            && slot.conn.is_some()
+            && slot.database.as_deref() != Some(database)
+            && (best_idx.is_none() || slot.last_used < best_last_used)
+        {
+            best_idx = Some(i);
+            best_last_used = slot.last_used;
         }
     }
 
@@ -505,8 +513,8 @@ impl<C: Connector> Drop for Recovery<'_, C> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicUsize;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
     // ── FakeConnector ────────────────────────────────────────────────
@@ -788,7 +796,11 @@ mod tests {
             state.slots.iter().all(|s| !s.busy),
             "all slots should be idle after dropping guard"
         );
-        let bound: Vec<_> = state.slots.iter().filter(|s| !s.database.is_empty()).collect();
+        let bound: Vec<_> = state
+            .slots
+            .iter()
+            .filter(|s| !s.database.is_empty())
+            .collect();
         assert_eq!(bound.len(), 1);
         assert_eq!(bound[0].database, "my-db");
     }
@@ -817,8 +829,7 @@ mod tests {
         // Recovery::drop to restore the slot.
         let mgr = SlotManager::new(HangingConnector, 1);
 
-        let result =
-            tokio::time::timeout(Duration::from_millis(10), mgr.acquire("A")).await;
+        let result = tokio::time::timeout(Duration::from_millis(10), mgr.acquire("A")).await;
 
         assert!(result.is_err(), "timeout should have elapsed");
 
