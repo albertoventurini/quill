@@ -1,3 +1,4 @@
+mod slots;
 mod store;
 
 use tauri::Manager;
