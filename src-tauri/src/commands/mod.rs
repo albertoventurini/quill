@@ -1,0 +1,341 @@
+//! Tauri command surface — the IPC bridge between frontend and backend.
+//!
+//! Every command that needs a database connection goes through the
+//! `ServerRegistry` (which holds per-server `SlotManager`s).  No command
+//! opens a Postgres connection eagerly — connections happen only inside
+//! `run_query` (AGENTS.md principle 1).
+
+use std::time::Instant;
+
+use secrecy::SecretString;
+use serde::Serialize;
+use serde_json::Value;
+use sqlx::Column;
+use sqlx::Row;
+use sqlx::TypeInfo;
+use sqlx::postgres::PgRow;
+use tauri::State;
+
+use crate::pg::PgConnector;
+use crate::registry::{ServerHandle, ServerRegistry};
+use crate::slots::{SlotError, SlotState};
+use crate::store;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Command error type  (serialized as { kind, message })
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Every command returns `Result<_, CommandError>`.  The serde tagging
+/// produces `{"kind": "Pg", "message": "..."}` so the frontend can
+/// branch on `kind` while always having a human-readable `message`.
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", content = "message")]
+pub enum CommandError {
+    UnknownConnection(String),
+    NotConnected(String),
+    Slot(String),
+    Pg(String),
+    Store(String),
+}
+
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnknownConnection(msg) => write!(f, "{msg}"),
+            Self::NotConnected(msg) => write!(f, "{msg}"),
+            Self::Slot(msg) => write!(f, "{msg}"),
+            Self::Pg(msg) => write!(f, "{msg}"),
+            Self::Store(msg) => write!(f, "{msg}"),
+        }
+    }
+}
+
+impl std::error::Error for CommandError {}
+
+// Convenience constructors
+impl CommandError {
+    fn unknown_connection(id: i64) -> Self {
+        Self::UnknownConnection(format!("connection {id} not found"))
+    }
+    fn not_connected(id: i64) -> Self {
+        Self::NotConnected(format!("not connected to server {id}"))
+    }
+}
+
+impl From<store::StoreError> for CommandError {
+    fn from(e: store::StoreError) -> Self {
+        Self::Store(e.to_string())
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Query result types
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Returned by `run_query`.  The frontend renders `rows` as a table using
+/// the `columns` metadata.
+#[derive(Debug, Serialize)]
+pub struct QueryResult {
+    pub columns: Vec<ColumnMeta>,
+    pub rows: Vec<Vec<Value>>,
+    pub row_count: usize,
+    pub duration_ms: u64,
+}
+
+/// Metadata for one result-set column.
+#[derive(Debug, Serialize)]
+pub struct ColumnMeta {
+    pub name: String,
+    pub type_name: String,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Row → JSON conversion
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Convert a single `PgRow` into a `Vec<serde_json::Value>`.
+///
+/// Switches on the column's Postgres type name.  Unrecognised types fall
+/// back to a best-effort `String` representation — this function **never
+/// errors**; the user always sees something.
+fn pg_row_to_json(row: &PgRow) -> Vec<Value> {
+    let columns = row.columns();
+    let mut values = Vec::with_capacity(columns.len());
+
+    for (i, col) in columns.iter().enumerate() {
+        let type_name = col.type_info().name();
+        let val = match type_name {
+            "bool" => row
+                .try_get::<bool, _>(i)
+                .map(Value::Bool)
+                .unwrap_or(Value::Null),
+
+            "int2" => row
+                .try_get::<i16, _>(i)
+                .map(|v| Value::Number((v as i64).into()))
+                .unwrap_or(Value::Null),
+
+            "int4" => row
+                .try_get::<i32, _>(i)
+                .map(|v| Value::Number((v as i64).into()))
+                .unwrap_or(Value::Null),
+
+            "int8" => row
+                .try_get::<i64, _>(i)
+                .map(|v| Value::Number(v.into()))
+                .unwrap_or(Value::Null),
+
+            "float4" => row
+                .try_get::<f32, _>(i)
+                .map(|v| {
+                    serde_json::Number::from_f64(v as f64)
+                        .map(Value::Number)
+                        .unwrap_or(Value::Null)
+                })
+                .unwrap_or(Value::Null),
+
+            "float8" => row
+                .try_get::<f64, _>(i)
+                .map(|v| {
+                    serde_json::Number::from_f64(v)
+                        .map(Value::Number)
+                        .unwrap_or(Value::Null)
+                })
+                .unwrap_or(Value::Null),
+
+            "json" | "jsonb" => row.try_get::<Value, _>(i).unwrap_or(Value::Null),
+
+            "bytea" => row
+                .try_get::<Vec<u8>, _>(i)
+                .map(|bytes| {
+                    use base64::Engine;
+                    Value::String(base64::engine::general_purpose::STANDARD.encode(&bytes))
+                })
+                .unwrap_or(Value::Null),
+
+            // text, varchar, name, date, time, timestamp, timestamptz,
+            // uuid, and anything else — fall back to String.
+            _ => row
+                .try_get::<String, _>(i)
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        };
+        values.push(val);
+    }
+
+    values
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Tauri commands
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// List all saved connections from the local store.
+#[tauri::command]
+pub async fn list_connections(
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<Vec<store::Connection>, CommandError> {
+    Ok(store::list(&pool).await?)
+}
+
+/// Save a new connection to the local store.  Returns the saved row with
+/// the auto-generated `id` and `created_at`.
+#[tauri::command]
+pub async fn save_connection(
+    new: store::NewConnection,
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<store::Connection, CommandError> {
+    Ok(store::insert(&pool, new).await?)
+}
+
+/// Delete a saved connection by id.  Does nothing if the id doesn't exist.
+#[tauri::command]
+pub async fn delete_connection(
+    id: i64,
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<(), CommandError> {
+    store::delete(&pool, id).await?;
+    Ok(())
+}
+
+/// Connect to a saved server.
+///
+/// 1. Load the `Connection` from the store; return `UnknownConnection` if missing.
+/// 2. Build a `PgConnector` from the row + the supplied password.
+/// 3. If the registry already contains a `ServerHandle` for `id`, reuse it
+///    (the password is ignored — the server is already running).
+/// 4. Otherwise, create a new `SlotManager<PgConnector>` with the row's
+///    `slot_budget` and insert it into the registry.
+/// 5. Return the current `SlotState`.  **No Postgres connection is opened**
+///    (AGENTS.md principle 1).
+#[tauri::command]
+pub async fn connect_server(
+    id: i64,
+    password: String,
+    pool: State<'_, sqlx::SqlitePool>,
+    registry: State<'_, ServerRegistry>,
+) -> Result<SlotState, CommandError> {
+    // Already connected?  Return current state immediately.
+    if let Some(handle) = registry.by_id.get(&id) {
+        return Ok(handle.slot_manager.state());
+    }
+
+    // Load the saved connection from the store.
+    let conn = store::get(&pool, id)
+        .await?
+        .ok_or_else(|| CommandError::unknown_connection(id))?;
+
+    // Build a PgConnector.
+    let ssl_mode =
+        PgConnector::parse_ssl_mode(&conn.ssl_mode).map_err(|e| CommandError::Pg(e.0))?;
+    let connector = PgConnector {
+        host: conn.host.clone(),
+        port: conn.port as u16,
+        username: conn.username.clone(),
+        password: SecretString::from(password),
+        ssl_mode,
+    };
+
+    let budget = conn.slot_budget.max(1) as usize;
+    let handle = ServerHandle::new(connector, budget);
+    let state = handle.slot_manager.state();
+
+    registry.by_id.insert(id, handle);
+    Ok(state)
+}
+
+/// Disconnect a server: remove it from the registry and close all its
+/// slots (idle ones immediately; busy ones when their guards drop).
+#[tauri::command]
+pub async fn disconnect_server(
+    id: i64,
+    registry: State<'_, ServerRegistry>,
+) -> Result<(), CommandError> {
+    // Remove and take the handle out of the map so disconnect_all runs
+    // outside the DashMap shard lock.
+    let handle = registry
+        .by_id
+        .remove(&id)
+        .map(|(_, h)| h)
+        .ok_or_else(|| CommandError::not_connected(id))?;
+
+    handle.slot_manager.disconnect_all().await;
+    Ok(())
+}
+
+/// Run a SQL query against a connected server.
+///
+/// 1. Look up the `ServerHandle` in the registry; return `NotConnected` if absent.
+/// 2. Acquire a slot bound to `database` via `slot_manager.acquire()` — this
+///    is the **only** place where a Postgres connection may be opened.
+/// 3. Execute the SQL; time it.
+/// 4. Convert rows to JSON; return a `QueryResult`.
+#[tauri::command]
+pub async fn run_query(
+    server_id: i64,
+    database: String,
+    sql: String,
+    registry: State<'_, ServerRegistry>,
+) -> Result<QueryResult, CommandError> {
+    let handle = registry
+        .by_id
+        .get(&server_id)
+        .ok_or_else(|| CommandError::not_connected(server_id))?;
+
+    // Clone the Arc out of the map so we don't hold a DashMap shard lock
+    // across the `.await`.
+    let slot_manager = handle.slot_manager.clone();
+    drop(handle);
+
+    let mut guard = slot_manager
+        .acquire(&database)
+        .await
+        .map_err(|e: SlotError| CommandError::Slot(e.to_string()))?;
+
+    let start = Instant::now();
+    let rows: Vec<PgRow> = sqlx::query(&sql)
+        .fetch_all(&mut *guard)
+        .await
+        .map_err(|e| CommandError::Pg(e.to_string()))?;
+    let duration_ms = start.elapsed().as_millis() as u64;
+
+    // Extract column metadata from the first row (if any).
+    let columns: Vec<ColumnMeta> = rows
+        .first()
+        .map(|r| {
+            r.columns()
+                .iter()
+                .map(|col| ColumnMeta {
+                    name: col.name().to_string(),
+                    type_name: col.type_info().name().to_string(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let row_count = rows.len();
+    let json_rows: Vec<Vec<Value>> = rows.iter().map(pg_row_to_json).collect();
+
+    // guard dropped here — slot returns to idle.
+
+    Ok(QueryResult {
+        columns,
+        rows: json_rows,
+        row_count,
+        duration_ms,
+    })
+}
+
+/// Return the current slot state for a connected server.
+///
+/// Synchronous — just reads the snapshot, no I/O.
+#[tauri::command]
+pub fn get_slot_state(
+    server_id: i64,
+    registry: State<'_, ServerRegistry>,
+) -> Result<Option<SlotState>, CommandError> {
+    Ok(registry
+        .by_id
+        .get(&server_id)
+        .map(|h| h.slot_manager.state()))
+}

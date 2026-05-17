@@ -1,15 +1,10 @@
+pub mod commands;
 pub mod pg;
 pub mod registry;
 pub mod slots;
 pub mod store;
 
 use tauri::Manager;
-
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -22,7 +17,15 @@ pub fn run() {
             app.manage(registry::ServerRegistry::default());
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            commands::list_connections,
+            commands::save_connection,
+            commands::delete_connection,
+            commands::connect_server,
+            commands::disconnect_server,
+            commands::run_query,
+            commands::get_slot_state,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

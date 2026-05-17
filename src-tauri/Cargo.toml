@@ -28,6 +28,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 thiserror = "2"
 secrecy = "0.10"
 dashmap = "6"
+base64 = "0.22"
 
 [dev-dependencies]
 url = "2"
