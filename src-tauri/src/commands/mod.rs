@@ -98,34 +98,34 @@ pub struct ColumnMeta {
 /// Switches on the column's Postgres type name.  Unrecognised types fall
 /// back to a best-effort `String` representation — this function **never
 /// errors**; the user always sees something.
-fn pg_row_to_json(row: &PgRow) -> Vec<Value> {
+pub fn pg_row_to_json(row: &PgRow) -> Vec<Value> {
     let columns = row.columns();
     let mut values = Vec::with_capacity(columns.len());
 
     for (i, col) in columns.iter().enumerate() {
         let type_name = col.type_info().name();
         let val = match type_name {
-            "bool" => row
+            "BOOL" => row
                 .try_get::<bool, _>(i)
                 .map(Value::Bool)
                 .unwrap_or(Value::Null),
 
-            "int2" => row
+            "INT2" => row
                 .try_get::<i16, _>(i)
                 .map(|v| Value::Number((v as i64).into()))
                 .unwrap_or(Value::Null),
 
-            "int4" => row
+            "INT4" => row
                 .try_get::<i32, _>(i)
                 .map(|v| Value::Number((v as i64).into()))
                 .unwrap_or(Value::Null),
 
-            "int8" => row
+            "INT8" => row
                 .try_get::<i64, _>(i)
                 .map(|v| Value::Number(v.into()))
                 .unwrap_or(Value::Null),
 
-            "float4" => row
+            "FLOAT4" => row
                 .try_get::<f32, _>(i)
                 .map(|v| {
                     serde_json::Number::from_f64(v as f64)
@@ -134,7 +134,7 @@ fn pg_row_to_json(row: &PgRow) -> Vec<Value> {
                 })
                 .unwrap_or(Value::Null),
 
-            "float8" => row
+            "FLOAT8" => row
                 .try_get::<f64, _>(i)
                 .map(|v| {
                     serde_json::Number::from_f64(v)
@@ -143,9 +143,9 @@ fn pg_row_to_json(row: &PgRow) -> Vec<Value> {
                 })
                 .unwrap_or(Value::Null),
 
-            "json" | "jsonb" => row.try_get::<Value, _>(i).unwrap_or(Value::Null),
+            "JSON" | "JSONB" => row.try_get::<Value, _>(i).unwrap_or(Value::Null),
 
-            "bytea" => row
+            "BYTEA" => row
                 .try_get::<Vec<u8>, _>(i)
                 .map(|bytes| {
                     use base64::Engine;
@@ -153,8 +153,13 @@ fn pg_row_to_json(row: &PgRow) -> Vec<Value> {
                 })
                 .unwrap_or(Value::Null),
 
-            // text, varchar, name, date, time, timestamp, timestamptz,
-            // uuid, and anything else — fall back to String.
+            "TEXT" | "VARCHAR" | "BPCHAR" | "CHAR" | "NAME" | "UUID"
+            | "DATE" | "TIME" | "TIMESTAMP" | "TIMESTAMPTZ" | "NUMERIC" | "OID" => row
+                .try_get::<String, _>(i)
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+
+            // any unrecognised type — best-effort String fallback
             _ => row
                 .try_get::<String, _>(i)
                 .map(Value::String)
@@ -292,6 +297,17 @@ pub async fn run_query(
         .await
         .map_err(|e: SlotError| CommandError::Slot(e.to_string()))?;
 
+    // Reject bare SELECT — Postgres treats it as a single empty row,
+    // but the user meant to type a real query.
+    {
+        let bare = sql.trim().trim_matches(';').trim();
+        if bare.eq_ignore_ascii_case("SELECT") {
+            return Err(CommandError::Pg(
+                "incomplete query: SELECT requires a column list".into(),
+            ));
+        }
+    }
+
     let start = Instant::now();
     let rows: Vec<PgRow> = sqlx::query(&sql)
         .fetch_all(&mut *guard)
@@ -338,4 +354,36 @@ pub fn get_slot_state(
         .by_id
         .get(&server_id)
         .map(|h| h.slot_manager.state()))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Unit tests
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cfg(test)]
+mod tests {
+    /// Test the bare-SELECT detection used by `run_query`.
+    fn is_bare_select(sql: &str) -> bool {
+        let bare = sql.trim().trim_matches(';').trim();
+        bare.eq_ignore_ascii_case("SELECT")
+    }
+
+    #[test]
+    fn rejects_bare_select_variants() {
+        assert!(is_bare_select("SELECT"));
+        assert!(is_bare_select("SELECT "));
+        assert!(is_bare_select("  SELECT  "));
+        assert!(is_bare_select("select"));
+        assert!(is_bare_select("SELECT;"));
+        assert!(is_bare_select("SELECT ;;;"));
+    }
+
+    #[test]
+    fn allows_real_select_queries() {
+        assert!(!is_bare_select("SELECT 1"));
+        assert!(!is_bare_select("SELECT * FROM foo"));
+        assert!(!is_bare_select(" SELECT pg_sleep(1) "));
+        assert!(!is_bare_select(""));
+        assert!(!is_bare_select("INSERT INTO t VALUES (1)"));
+    }
 }

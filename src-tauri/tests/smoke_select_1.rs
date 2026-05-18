@@ -12,6 +12,7 @@
 //! Without the env var, every test silently passes after a stderr note.
 
 use sqlx::Column;
+use sqlx::Connection;
 use sqlx::Row;
 use sqlx::postgres::PgRow;
 
@@ -211,4 +212,163 @@ fn command_error_serde_shape() {
     let json = serde_json::to_value(err).expect("serialize");
     assert_eq!(json["kind"], "UnknownConnection");
     assert_eq!(json["message"], "connection 42 not found");
+}
+
+// ── Test 4: pg_row_to_json maps Postgres types correctly ─────────────
+
+#[tokio::test]
+async fn pg_row_to_json_maps_int4_correctly() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+
+    let rows: Vec<PgRow> = sqlx::query("SELECT 1 AS num")
+        .fetch_all(&mut conn)
+        .await
+        .expect("SELECT 1");
+
+    let values = quill_lib::commands::pg_row_to_json(&rows[0]);
+    assert_eq!(values.len(), 1, "should have 1 column");
+    match &values[0] {
+        serde_json::Value::Number(n) => assert_eq!(n.as_i64(), Some(1), "SELECT 1 should be 1"),
+        other => panic!("expected Number(1), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn pg_row_to_json_maps_bool_correctly() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+
+    let rows: Vec<PgRow> = sqlx::query("SELECT true AS flag")
+        .fetch_all(&mut conn)
+        .await
+        .expect("SELECT true");
+
+    let values = quill_lib::commands::pg_row_to_json(&rows[0]);
+    assert_eq!(values.len(), 1, "should have 1 column");
+    match &values[0] {
+        serde_json::Value::Bool(b) => assert!(*b, "SELECT true should be true"),
+        other => panic!("expected Bool(true), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn pg_row_to_json_maps_float_correctly() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+
+    let rows: Vec<PgRow> = sqlx::query("SELECT 3.14::float8 AS val")
+        .fetch_all(&mut conn)
+        .await
+        .expect("SELECT 3.14::float8");
+
+    let values = quill_lib::commands::pg_row_to_json(&rows[0]);
+    assert_eq!(values.len(), 1, "should have 1 column");
+    match &values[0] {
+        serde_json::Value::Number(n) => {
+            let f = n.as_f64().expect("should be f64");
+            assert!((f - 3.14).abs() < 0.001, "SELECT 3.14 should be ~3.14, got {f}");
+        }
+        other => panic!("expected Number, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn pg_row_to_json_maps_text_correctly() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+
+    let rows: Vec<PgRow> = sqlx::query("SELECT 'hello'::text AS msg")
+        .fetch_all(&mut conn)
+        .await
+        .expect("SELECT 'hello'::text");
+
+    let values = quill_lib::commands::pg_row_to_json(&rows[0]);
+    assert_eq!(values.len(), 1, "should have 1 column");
+    match &values[0] {
+        serde_json::Value::String(s) => assert_eq!(s, "hello"),
+        other => panic!("expected String(\"hello\"), got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn pg_row_to_json_maps_null_correctly() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+
+    let rows: Vec<PgRow> = sqlx::query("SELECT NULL::int4 AS nothing")
+        .fetch_all(&mut conn)
+        .await
+        .expect("SELECT NULL::int4");
+
+    let values = quill_lib::commands::pg_row_to_json(&rows[0]);
+    assert_eq!(values.len(), 1, "should have 1 column");
+    assert!(values[0].is_null(), "NULL should remain null, got {:?}", values[0]);
+}
+
+// ── Test 5: bare SELECT yields an empty result from Postgres ─────────────
+// (Postgres treats a bare SELECT with no column list as a single empty-row
+// result.  Quill's `run_query` command adds its own validation above sqlx;
+// that validation is tested in the unit-tests in commands/mod.rs.)
+
+#[tokio::test]
+async fn bare_select_returns_empty_row_from_postgres() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+
+    let result = sqlx::query("SELECT ")
+        .fetch_all(&mut conn)
+        .await;
+
+    // Postgres treats bare SELECT as a valid query returning one empty row.
+    let rows = result.expect("bare SELECT should succeed at the PG level");
+    assert_eq!(rows.len(), 1);
 }
