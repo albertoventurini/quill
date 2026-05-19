@@ -58,10 +58,45 @@ export type ColumnMeta = {
   type_name: string;
 };
 
+// ── Introspection types (mirrors introspect::*) ──
+
+export type DatabaseInfo = { name: string };
+
+export type RelationKind =
+  | "table"
+  | "view"
+  | "matview"
+  | "partitioned_table";
+
+export type RelationInfo = { name: string; kind: RelationKind };
+
+export type FunctionKind =
+  | "function"
+  | "procedure"
+  | "aggregate"
+  | "window";
+
+export type FunctionInfo = { name: string; kind: FunctionKind };
+
+export type SchemaInfoPayload = {
+  name: string;
+  relations: RelationInfo[];
+  functions: FunctionInfo[];
+};
+
+export type SchemaPayload = { v: number; schemas: SchemaInfoPayload[] };
+
 // ── Error type (mirrors commands::CommandError serde tagging) ──
 
 export type CommandError = {
-  kind: "UnknownConnection" | "NotConnected" | "Slot" | "Pg" | "Store";
+  kind:
+    | "UnknownConnection"
+    | "NotConnected"
+    | "Slot"
+    | "Pg"
+    | "Store"
+    | "Introspect"
+    | "UnknownDatabase";
   message: string;
 };
 
@@ -91,4 +126,19 @@ export const api = {
 
   getSlotState: (serverId: number) =>
     invoke<SlotState | null>("get_slot_state", { serverId }),
+
+  listDatabases: (serverId: number) =>
+    invoke<DatabaseInfo[]>("list_databases", { serverId }),
+
+  listSchemas: (serverId: number, database: string) =>
+    invoke<string[]>("list_schemas", { serverId, database }),
+
+  listRelations: (serverId: number, database: string, schema: string) =>
+    invoke<RelationInfo[]>("list_relations", { serverId, database, schema }),
+
+  listFunctions: (serverId: number, database: string, schema: string) =>
+    invoke<FunctionInfo[]>("list_functions", { serverId, database, schema }),
+
+  refreshSchemaCache: (serverId: number, database: string) =>
+    invoke<SchemaPayload>("refresh_schema_cache", { serverId, database }),
 };
