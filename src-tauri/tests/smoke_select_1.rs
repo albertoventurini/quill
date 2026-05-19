@@ -269,6 +269,7 @@ async fn pg_row_to_json_maps_bool_correctly() {
 }
 
 #[tokio::test]
+#[allow(clippy::approx_constant)]
 async fn pg_row_to_json_maps_float_correctly() {
     let Some(dsn) = dsn() else {
         skip_note();
@@ -291,7 +292,10 @@ async fn pg_row_to_json_maps_float_correctly() {
     match &values[0] {
         serde_json::Value::Number(n) => {
             let f = n.as_f64().expect("should be f64");
-            assert!((f - 3.14).abs() < 0.001, "SELECT 3.14 should be ~3.14, got {f}");
+            assert!(
+                (f - 3.14).abs() < 0.001,
+                "SELECT 3.14 should be ~3.14, got {f}"
+            );
         }
         other => panic!("expected Number, got {other:?}"),
     }
@@ -343,7 +347,11 @@ async fn pg_row_to_json_maps_null_correctly() {
 
     let values = quill_lib::commands::pg_row_to_json(&rows[0]);
     assert_eq!(values.len(), 1, "should have 1 column");
-    assert!(values[0].is_null(), "NULL should remain null, got {:?}", values[0]);
+    assert!(
+        values[0].is_null(),
+        "NULL should remain null, got {:?}",
+        values[0]
+    );
 }
 
 // ── Test 5: bare SELECT yields an empty result from Postgres ─────────────
@@ -364,9 +372,7 @@ async fn bare_select_returns_empty_row_from_postgres() {
     );
     let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
 
-    let result = sqlx::query("SELECT ")
-        .fetch_all(&mut conn)
-        .await;
+    let result = sqlx::query("SELECT ").fetch_all(&mut conn).await;
 
     // Postgres treats bare SELECT as a valid query returning one empty row.
     let rows = result.expect("bare SELECT should succeed at the PG level");

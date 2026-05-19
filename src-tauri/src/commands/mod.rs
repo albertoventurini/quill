@@ -153,8 +153,8 @@ pub fn pg_row_to_json(row: &PgRow) -> Vec<Value> {
                 })
                 .unwrap_or(Value::Null),
 
-            "TEXT" | "VARCHAR" | "BPCHAR" | "CHAR" | "NAME" | "UUID"
-            | "DATE" | "TIME" | "TIMESTAMP" | "TIMESTAMPTZ" | "NUMERIC" | "OID" => row
+            "TEXT" | "VARCHAR" | "BPCHAR" | "CHAR" | "NAME" | "UUID" | "DATE" | "TIME"
+            | "TIMESTAMP" | "TIMESTAMPTZ" | "NUMERIC" | "OID" => row
                 .try_get::<String, _>(i)
                 .map(Value::String)
                 .unwrap_or(Value::Null),
