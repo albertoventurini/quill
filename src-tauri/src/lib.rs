@@ -1,4 +1,5 @@
 pub mod commands;
+pub mod introspect;
 pub mod pg;
 pub mod registry;
 pub mod slots;
