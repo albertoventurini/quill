@@ -57,7 +57,7 @@ async fn list_databases_returns_postgres_and_excludes_template0() {
         return;
     };
     let connector = connector_from(&dsn);
-    let conn = connector.connect(&dsn.database).await.expect("connect");
+    let (conn, _cancel) = connector.connect(&dsn.database).await.expect("connect");
 
     let dbs = introspect::list_databases(&conn)
         .await
@@ -92,7 +92,7 @@ async fn introspect_database_returns_public_schema_with_v1_payload() {
         return;
     };
     let connector = connector_from(&dsn);
-    let conn = connector.connect(&dsn.database).await.expect("connect");
+    let (conn, _cancel) = connector.connect(&dsn.database).await.expect("connect");
 
     let payload: SchemaPayload = introspect::introspect_database(&conn)
         .await
@@ -124,7 +124,7 @@ async fn introspect_database_distinguishes_table_view_matview_function() {
         return;
     };
     let connector = connector_from(&dsn);
-    let conn = connector.connect(&dsn.database).await.expect("connect");
+    let (conn, _cancel) = connector.connect(&dsn.database).await.expect("connect");
 
     // Build a small fixture inside a transient schema so we don't pollute
     // the connecting user's `public`.  ROLLBACK at the end discards it.
@@ -197,7 +197,7 @@ async fn introspect_database_serializes_to_json_string() {
         return;
     };
     let connector = connector_from(&dsn);
-    let conn = connector.connect(&dsn.database).await.expect("connect");
+    let (conn, _cancel) = connector.connect(&dsn.database).await.expect("connect");
 
     let payload = introspect::introspect_database(&conn)
         .await

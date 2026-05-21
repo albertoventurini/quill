@@ -40,8 +40,14 @@ pub struct ConnectorError(pub String);
 pub trait Connector: Send + Sync + 'static {
     type Conn: Send + 'static;
 
+    /// A cheap-to-clone handle that, when invoked, terminates the in-flight
+    /// query on this connection out-of-band.  See [`crate::pg::PgCancelHandle`]
+    /// for the Postgres impl.  The slot manager treats this value as opaque
+    /// — it only stores, clones, and hands it out.
+    type Cancel: Clone + Send + Sync + 'static;
+
     /// Open a new connection to `database`.
-    async fn connect(&self, database: &str) -> Result<Self::Conn, ConnectorError>;
+    async fn connect(&self, database: &str) -> Result<(Self::Conn, Self::Cancel), ConnectorError>;
 
     /// Close a previously-opened connection (best-effort).
     async fn close(conn: Self::Conn);
@@ -98,6 +104,10 @@ struct Slot<C: Connector> {
     /// Set by [`SlotManager::disconnect_all`]; the next guard drop will close
     /// the connection instead of returning it.
     disconnect_pending: bool,
+    /// Cancel handle for the connection currently bound to this slot.
+    /// `Some` iff `database` is `Some` AND the slot has reached the "live
+    /// connection" state at least once.  Cleared on close/eviction.
+    cancel: Option<C::Cancel>,
 }
 
 impl<C: Connector> Slot<C> {
@@ -108,6 +118,7 @@ impl<C: Connector> Slot<C> {
             last_used: Instant::now(),
             busy: false,
             disconnect_pending: false,
+            cancel: None,
         }
     }
 }
@@ -207,6 +218,7 @@ impl<C: Connector> Drop for SlotGuard<'_, C> {
             // Close the connection asynchronously (one-shot cleanup).
             slot.conn = None;
             slot.database = None;
+            slot.cancel = None;
             slot.disconnect_pending = false;
             drop(slots);
 
@@ -325,10 +337,17 @@ impl<C: Connector> SlotManager<C> {
                     recovered: std::cell::Cell::new(false),
                 };
 
-                let new_conn = self.connector.connect(&db).await.map_err(|e| {
+                let (new_conn, new_cancel) = self.connector.connect(&db).await.map_err(|e| {
                     // The drop of `recovery` will restore the slot.
                     SlotError::Connect(e)
                 })?;
+
+                // Slot's cancel is set here; it persists across busy/idle transitions
+                // until eviction or disconnect_all.
+                {
+                    let mut slots = self.slots.lock().unwrap();
+                    slots[idx].cancel = Some(new_cancel);
+                }
 
                 recovery.recovered.set(true);
                 // recovery drops here without restoring.
@@ -367,6 +386,13 @@ impl<C: Connector> SlotManager<C> {
     ///
     /// Idle connections are closed immediately.  Busy slots are flagged so
     /// their connection is closed when the outstanding guard is dropped.
+    ///
+    /// # Cancel handles on busy slots
+    ///
+    /// Busy slots keep their cancel handle alive during the closing window.
+    /// If a user cancels a query mid-disconnect, the cancel may race with the
+    /// conn closing — both are safe; whichever finishes first wins.
+    /// The guard's drop clears the cancel.
     pub async fn disconnect_all(&self) {
         // Collect all idle connections to close outside the lock.
         let mut to_close: Vec<C::Conn> = Vec::new();
@@ -380,6 +406,7 @@ impl<C: Connector> SlotManager<C> {
                 } else if let Some(conn) = slot.conn.take() {
                     // Close below, after dropping the lock.
                     slot.database = None;
+                    slot.cancel = None;
                     to_close.push(conn);
                 }
             }
@@ -403,6 +430,25 @@ impl<C: Connector> SlotManager<C> {
         slots.resize_with(new_budget, Slot::free);
         self.budget.store(new_budget, Ordering::Relaxed);
         Ok(())
+    }
+
+    /// Return a cloned cancel handle for every slot that is currently
+    /// **busy** (i.e. has a guard outstanding and therefore a query in
+    /// flight).  Optionally filter by database.
+    ///
+    /// Used by the `cancel_query` Tauri command to dispatch
+    /// `CancelRequest` packets without touching any slot — see M3.3 spec.
+    pub fn busy_cancel_handles(&self, database: Option<&str>) -> Vec<C::Cancel> {
+        let slots = self.slots.lock().unwrap();
+        slots
+            .iter()
+            .filter(|s| s.busy)
+            .filter(|s| match database {
+                Some(d) => s.database.as_deref() == Some(d),
+                None => true,
+            })
+            .filter_map(|s| s.cancel.clone())
+            .collect()
     }
 }
 
@@ -462,6 +508,7 @@ fn apply_rules<C: Connector>(
         let slot = &mut slots[i];
         let evict_conn = slot.conn.take().expect("checked above");
         let _old_db = slot.database.take(); // no longer bound to the old database
+        slot.cancel = None; // invalid once the conn is closed
         slot.busy = true;
         slot.database = Some(database.to_string());
         slot.last_used = Instant::now();
@@ -498,6 +545,7 @@ impl<C: Connector> Drop for Recovery<'_, C> {
                 let slot = &mut guard[self.idx];
                 slot.conn = None;
                 slot.database = None;
+                slot.cancel = None;
                 slot.busy = false;
                 slot.disconnect_pending = false;
             }
@@ -518,6 +566,14 @@ mod tests {
     use std::time::Duration;
 
     // ── FakeConnector ────────────────────────────────────────────────
+
+    /// A minimal cancel handle used by [`FakeConnector`].  Carries a
+    /// counter so tests can assert cancel handles were retrievable.
+    #[derive(Clone, Default)]
+    struct FakeCancel {
+        #[allow(dead_code)]
+        cancel_count: Arc<AtomicUsize>,
+    }
 
     /// A connection value produced by [`FakeConnector`].
     ///
@@ -551,14 +607,20 @@ mod tests {
     #[async_trait]
     impl Connector for FakeConnector {
         type Conn = FakeConn;
+        type Cancel = FakeCancel;
 
-        async fn connect(&self, _database: &str) -> Result<Self::Conn, ConnectorError> {
+        async fn connect(
+            &self,
+            _database: &str,
+        ) -> Result<(Self::Conn, Self::Cancel), ConnectorError> {
             self.connect_counter.fetch_add(1, Ordering::SeqCst);
             let id = self.next_id.fetch_add(1, Ordering::SeqCst);
-            Ok(FakeConn {
+            let cancel = FakeCancel::default();
+            let conn = FakeConn {
                 _id: id as u32,
                 close_counter: self.close_counter.clone(),
-            })
+            };
+            Ok((conn, cancel))
         }
 
         async fn close(conn: Self::Conn) {
@@ -814,9 +876,15 @@ mod tests {
     #[async_trait]
     impl Connector for HangingConnector {
         type Conn = ();
-        async fn connect(&self, _database: &str) -> Result<Self::Conn, ConnectorError> {
+        type Cancel = ();
+
+        async fn connect(
+            &self,
+            _database: &str,
+        ) -> Result<(Self::Conn, Self::Cancel), ConnectorError> {
             std::future::pending().await
         }
+
         async fn close(conn: Self::Conn) {
             let _ = conn;
         }
@@ -839,5 +907,50 @@ mod tests {
             state.slots.iter().all(|s| !s.busy && s.database.is_empty()),
             "cancelled acquire should restore slot to free: got {state:?}"
         );
+    }
+
+    // ── busy_cancel_handles ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn busy_cancel_handles_returns_one_per_busy_slot() {
+        let (conn, _connects, _closes) = FakeConnector::new();
+        let mgr = SlotManager::new(conn, 2);
+
+        let g1 = mgr.acquire("A").await.unwrap();
+        let g2 = mgr.acquire("B").await.unwrap();
+
+        let handles = mgr.busy_cancel_handles(None);
+        assert_eq!(handles.len(), 2);
+
+        let only_a = mgr.busy_cancel_handles(Some("A"));
+        assert_eq!(only_a.len(), 1);
+
+        drop(g1);
+        drop(g2);
+
+        // After guards drop, slots are idle — busy_cancel_handles returns empty.
+        assert!(mgr.busy_cancel_handles(None).is_empty());
+    }
+
+    #[tokio::test]
+    async fn lru_eviction_drops_old_cancel() {
+        let (conn, _connects, _closes) = FakeConnector::new();
+        let mgr = SlotManager::new(conn, 1);
+
+        // Bind to A.
+        let g = mgr.acquire("A").await.unwrap();
+        drop(g);
+
+        // Acquire B, which evicts A.
+        let g = mgr.acquire("B").await.unwrap();
+        drop(g);
+
+        // The slot's cancel must now be the one tied to B, not A.  We can't
+        // observe identity directly, but we can observe that there is exactly
+        // one cancel handle reachable.
+        let g = mgr.acquire("B").await.unwrap();
+        let handles = mgr.busy_cancel_handles(None);
+        drop(g);
+        assert_eq!(handles.len(), 1);
     }
 }

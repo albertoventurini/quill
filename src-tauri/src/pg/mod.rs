@@ -10,9 +10,11 @@
 //! deliberately uses a raw `Client`, never `tokio_postgres::Pool` — there is
 //! no built-in pool in tokio-postgres anyway.
 
+use std::sync::Arc;
+
 use async_trait::async_trait;
 use secrecy::{ExposeSecret, SecretString};
-use tokio_postgres::{Client, Config, NoTls, config::SslMode};
+use tokio_postgres::{CancelToken, Client, Config, NoTls, config::SslMode};
 use tokio_postgres_rustls::MakeRustlsConnect;
 
 use crate::slots::{Connector, ConnectorError};
@@ -89,27 +91,32 @@ impl PgConnector {
 #[async_trait]
 impl Connector for PgConnector {
     type Conn = Client;
+    type Cancel = PgCancelHandle;
 
-    async fn connect(&self, database: &str) -> Result<Self::Conn, ConnectorError> {
+    async fn connect(&self, database: &str) -> Result<(Self::Conn, Self::Cancel), ConnectorError> {
         let config = self.build_config(database);
 
-        if self.ssl_mode.wants_tls() {
+        let (client, cancel_token) = if self.ssl_mode.wants_tls() {
             let tls =
                 make_rustls().map_err(|e| ConnectorError(format!("rustls setup failed: {e}")))?;
             let (client, connection) = config
                 .connect(tls)
                 .await
                 .map_err(|e| ConnectorError(e.to_string()))?;
+            let cancel_token = client.cancel_token();
             spawn_connection_driver(connection);
-            Ok(client)
+            (client, cancel_token)
         } else {
             let (client, connection) = config
                 .connect(NoTls)
                 .await
                 .map_err(|e| ConnectorError(e.to_string()))?;
+            let cancel_token = client.cancel_token();
             spawn_connection_driver(connection);
-            Ok(client)
-        }
+            (client, cancel_token)
+        };
+
+        Ok((client, PgCancelHandle::new(cancel_token, self.ssl_mode)))
     }
 
     /// tokio-postgres has no explicit `close` — dropping the [`Client`]
@@ -154,6 +161,58 @@ fn make_rustls() -> Result<MakeRustlsConnect, Box<dyn std::error::Error>> {
         .with_no_client_auth();
 
     Ok(MakeRustlsConnect::new(config))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Cancel handle
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Cancel handle for a single Postgres backend.
+///
+/// Carries the [`CancelToken`] (which embeds PID + secret key from the
+/// `BackendKeyData` startup message) and the [`SslPolicy`] used by the
+/// originating connection — `cancel_query` opens its own TCP socket and
+/// must match the SSL setup of the original handshake.
+///
+/// Wrapped in [`Arc`] so the slot manager can clone it cheaply for hand-off
+/// to the `cancel_query` Tauri command.
+#[derive(Clone)]
+pub struct PgCancelHandle {
+    inner: Arc<PgCancelInner>,
+}
+
+struct PgCancelInner {
+    token: CancelToken,
+    ssl_policy: SslPolicy,
+}
+
+impl PgCancelHandle {
+    fn new(token: CancelToken, ssl_policy: SslPolicy) -> Self {
+        Self {
+            inner: Arc::new(PgCancelInner { token, ssl_policy }),
+        }
+    }
+
+    /// Send a `CancelRequest` over a fresh TCP connection.  Returns the
+    /// underlying tokio-postgres error message on failure; the cancel is
+    /// best-effort — Postgres returns no acknowledgement.
+    pub async fn cancel(&self) -> Result<(), String> {
+        let inner = &self.inner;
+        if inner.ssl_policy.wants_tls() {
+            let tls = make_rustls().map_err(|e| format!("rustls setup failed: {e}"))?;
+            inner
+                .token
+                .cancel_query(tls)
+                .await
+                .map_err(|e| e.to_string())
+        } else {
+            inner
+                .token
+                .cancel_query(NoTls)
+                .await
+                .map_err(|e| e.to_string())
+        }
+    }
 }
 
 #[cfg(test)]

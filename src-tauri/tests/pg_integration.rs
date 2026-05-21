@@ -59,7 +59,7 @@ async fn connector_runs_select_one() {
     };
 
     let connector = connector_from(&dsn);
-    let conn = connector.connect(&dsn.database).await.expect("connect");
+    let (conn, _cancel) = connector.connect(&dsn.database).await.expect("connect");
 
     let row = conn.query_one("SELECT 1", &[]).await.expect("SELECT 1");
     let n: i32 = row.get(0);
@@ -144,6 +144,6 @@ async fn bad_password_returns_connect_error() {
     dsn.password.push_str("-wrong");
 
     let connector = connector_from(&dsn);
-    let result = connector.connect(&dsn.database).await;
+    let result = connector.connect(&dsn.database).await.map(|(c, _)| c);
     assert!(result.is_err(), "expected auth failure, got Ok");
 }
