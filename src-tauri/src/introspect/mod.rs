@@ -3,8 +3,8 @@
 //! Reads `pg_database`, `pg_namespace`, `pg_class`, and `pg_proc` directly.
 //! No `information_schema`; no `psql` shell-outs.
 //!
-//! All functions take a borrowed `&mut PgConnection` so callers can pass
-//! `&mut *guard` from a `SlotGuard<'_, PgConnector>`.  The introspection
+//! All functions take a borrowed `&tokio_postgres::Client` so callers can
+//! pass `&*guard` from a `SlotGuard<'_, PgConnector>`.  The introspection
 //! module deliberately knows nothing about the slot manager or the local
 //! SQLite cache — those compositional concerns belong in `commands` (M2.3).
 //!
@@ -14,9 +14,8 @@
 //! will add column metadata); for M2 v1 is fixed at 1.
 
 use serde::{Deserialize, Serialize};
-use sqlx::PgConnection;
-use sqlx::Row;
 use thiserror::Error;
+use tokio_postgres::Client;
 
 /// Canonical version of the schema-cache payload.  Bumped only when the
 /// `SchemaPayload` wire shape changes in a way old payloads cannot satisfy.
@@ -29,7 +28,7 @@ pub const PAYLOAD_VERSION: u32 = 1;
 #[derive(Debug, Error)]
 pub enum IntrospectError {
     #[error("Postgres error: {0}")]
-    Pg(#[from] sqlx::Error),
+    Pg(#[from] tokio_postgres::Error),
 
     #[error("unknown relkind '{0}' returned by pg_class")]
     UnknownRelKind(String),
@@ -127,19 +126,27 @@ impl FunctionKind {
 ///
 /// Ordered by `datname`.  Excludes `template0` (datallowconn=false) and
 /// every datistemplate=true row including `template1`.
-pub async fn list_databases(conn: &mut PgConnection) -> Result<Vec<DatabaseInfo>, IntrospectError> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT datname \
-         FROM pg_database \
-         WHERE datallowconn AND NOT datistemplate \
-         ORDER BY datname",
-    )
-    .fetch_all(conn)
-    .await?;
+///
+/// # Safety
+///
+/// The `pg_database` catalog does not return NULL datnames, so the bare
+/// `.get` form is safe here.
+pub async fn list_databases(client: &Client) -> Result<Vec<DatabaseInfo>, IntrospectError> {
+    let rows = client
+        .query(
+            "SELECT datname \
+             FROM pg_database \
+             WHERE datallowconn AND NOT datistemplate \
+             ORDER BY datname",
+            &[],
+        )
+        .await?;
 
     Ok(rows
         .into_iter()
-        .map(|(name,)| DatabaseInfo { name })
+        .map(|r| DatabaseInfo {
+            name: r.get::<_, &str>("datname").to_string(),
+        })
         .collect())
 }
 
@@ -149,12 +156,10 @@ pub async fn list_databases(conn: &mut PgConnection) -> Result<Vec<DatabaseInfo>
 /// (schemas, relations, functions) and stitches them into a single
 /// `SchemaPayload`.  Schemas with no relations and no functions still
 /// appear (the user expects to see an empty schema as an empty folder).
-pub async fn introspect_database(
-    conn: &mut PgConnection,
-) -> Result<SchemaPayload, IntrospectError> {
-    let schemas = list_schema_names(&mut *conn).await?;
-    let relations = list_all_relations(&mut *conn).await?;
-    let functions = list_all_functions(&mut *conn).await?;
+pub async fn introspect_database(client: &Client) -> Result<SchemaPayload, IntrospectError> {
+    let schemas = list_schema_names(client).await?;
+    let relations = list_all_relations(client).await?;
+    let functions = list_all_functions(client).await?;
 
     let mut by_schema: std::collections::BTreeMap<String, SchemaInfo> = schemas
         .into_iter()
@@ -203,25 +208,30 @@ pub async fn introspect_database(
 // Internals — one query per system catalog
 // ---------------------------------------------------------------------------
 
-async fn list_schema_names(conn: &mut PgConnection) -> Result<Vec<String>, IntrospectError> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        r"SELECT nspname
+async fn list_schema_names(client: &Client) -> Result<Vec<String>, IntrospectError> {
+    let rows = client
+        .query(
+            r"SELECT nspname
           FROM pg_namespace
           WHERE nspname NOT LIKE 'pg\_%' ESCAPE '\'
             AND nspname <> 'information_schema'
           ORDER BY nspname",
-    )
-    .fetch_all(conn)
-    .await?;
+            &[],
+        )
+        .await?;
 
-    Ok(rows.into_iter().map(|(s,)| s).collect())
+    Ok(rows
+        .into_iter()
+        .map(|r| r.get::<_, &str>("nspname").to_string())
+        .collect())
 }
 
 async fn list_all_relations(
-    conn: &mut PgConnection,
+    client: &Client,
 ) -> Result<Vec<(String, RelationInfo)>, IntrospectError> {
-    let rows = sqlx::query(
-        r"SELECT n.nspname AS schema,
+    let rows = client
+        .query(
+            r"SELECT n.nspname AS schema,
                  c.relname AS name,
                  c.relkind::text AS kind
           FROM pg_class c
@@ -230,15 +240,15 @@ async fn list_all_relations(
             AND n.nspname NOT LIKE 'pg\_%' ESCAPE '\'
             AND n.nspname <> 'information_schema'
           ORDER BY n.nspname, c.relname",
-    )
-    .fetch_all(conn)
-    .await?;
+            &[],
+        )
+        .await?;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let schema: String = row.try_get("schema")?;
-        let name: String = row.try_get("name")?;
-        let kind_str: String = row.try_get("kind")?;
+        let schema: String = row.try_get::<_, &str>("schema")?.to_string();
+        let name: String = row.try_get::<_, &str>("name")?.to_string();
+        let kind_str: String = row.try_get::<_, &str>("kind")?.to_string();
         let kind_char = kind_str
             .chars()
             .next()
@@ -250,10 +260,11 @@ async fn list_all_relations(
 }
 
 async fn list_all_functions(
-    conn: &mut PgConnection,
+    client: &Client,
 ) -> Result<Vec<(String, FunctionInfo)>, IntrospectError> {
-    let rows = sqlx::query(
-        r"SELECT n.nspname AS schema,
+    let rows = client
+        .query(
+            r"SELECT n.nspname AS schema,
                  p.proname AS name,
                  p.prokind::text AS kind
           FROM pg_proc p
@@ -261,15 +272,15 @@ async fn list_all_functions(
           WHERE n.nspname NOT LIKE 'pg\_%' ESCAPE '\'
             AND n.nspname <> 'information_schema'
           ORDER BY n.nspname, p.proname",
-    )
-    .fetch_all(conn)
-    .await?;
+            &[],
+        )
+        .await?;
 
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
-        let schema: String = row.try_get("schema")?;
-        let name: String = row.try_get("name")?;
-        let kind_str: String = row.try_get("kind")?;
+        let schema: String = row.try_get::<_, &str>("schema")?.to_string();
+        let name: String = row.try_get::<_, &str>("name")?.to_string();
+        let kind_str: String = row.try_get::<_, &str>("kind")?.to_string();
         let kind_char = kind_str
             .chars()
             .next()

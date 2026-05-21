@@ -12,7 +12,7 @@
 use secrecy::SecretString;
 
 use quill_lib::introspect::{self, PAYLOAD_VERSION};
-use quill_lib::pg::PgConnector;
+use quill_lib::pg::{PgConnector, SslPolicy};
 use quill_lib::registry::{ServerHandle, ServerRegistry};
 use quill_lib::store;
 
@@ -81,7 +81,7 @@ async fn fresh_pool_and_server(dsn: &TestDsn) -> (sqlx::SqlitePool, ServerRegist
         port: dsn.port,
         username: dsn.username.clone(),
         password: SecretString::from(dsn.password.clone()),
-        ssl_mode: sqlx::postgres::PgSslMode::Disable,
+        ssl_mode: SslPolicy::Disable,
     };
     let handle = ServerHandle::new(connector, conn.slot_budget.max(1) as usize);
     registry.by_id.insert(conn.id, handle);
@@ -101,8 +101,8 @@ async fn list_databases_returns_postgres() {
     let mgr = handle.slot_manager.clone();
     drop(handle);
 
-    let mut guard = mgr.acquire(&dsn.database).await.expect("acquire");
-    let dbs = introspect::list_databases(&mut guard)
+    let guard = mgr.acquire(&dsn.database).await.expect("acquire");
+    let dbs = introspect::list_databases(&guard)
         .await
         .expect("list_databases");
     drop(guard);
@@ -134,8 +134,8 @@ async fn ensure_payload_misses_then_hits() {
     let mgr = handle.slot_manager.clone();
     drop(handle);
 
-    let mut guard = mgr.acquire(&dsn.database).await.expect("acquire");
-    let payload1 = introspect::introspect_database(&mut guard)
+    let guard = mgr.acquire(&dsn.database).await.expect("acquire");
+    let payload1 = introspect::introspect_database(&guard)
         .await
         .expect("introspect");
     drop(guard);
@@ -190,8 +190,8 @@ async fn refresh_overwrites_existing_cache() {
     let mgr = handle.slot_manager.clone();
     drop(handle);
 
-    let mut guard = mgr.acquire(&dsn.database).await.expect("acquire");
-    let fresh = introspect::introspect_database(&mut guard)
+    let guard = mgr.acquire(&dsn.database).await.expect("acquire");
+    let fresh = introspect::introspect_database(&guard)
         .await
         .expect("introspect");
     drop(guard);

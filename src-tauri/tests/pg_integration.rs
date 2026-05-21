@@ -13,7 +13,7 @@
 
 use secrecy::SecretString;
 
-use quill_lib::pg::PgConnector;
+use quill_lib::pg::{PgConnector, SslPolicy};
 use quill_lib::slots::{Connector, SlotManager};
 
 /// Parsed test-DSN pieces.  Built from `QUILL_TEST_PG_URL`.
@@ -47,7 +47,7 @@ fn connector_from(dsn: &TestDsn) -> PgConnector {
         port: dsn.port,
         username: dsn.username.clone(),
         password: SecretString::from(dsn.password.clone()),
-        ssl_mode: sqlx::postgres::PgSslMode::Disable,
+        ssl_mode: SslPolicy::Disable,
     }
 }
 
@@ -59,12 +59,10 @@ async fn connector_runs_select_one() {
     };
 
     let connector = connector_from(&dsn);
-    let mut conn = connector.connect(&dsn.database).await.expect("connect");
+    let conn = connector.connect(&dsn.database).await.expect("connect");
 
-    let (n,): (i32,) = sqlx::query_as("SELECT 1")
-        .fetch_one(&mut conn)
-        .await
-        .expect("SELECT 1");
+    let row = conn.query_one("SELECT 1", &[]).await.expect("SELECT 1");
+    let n: i32 = row.get(0);
     assert_eq!(n, 1);
 
     PgConnector::close(conn).await;
@@ -79,19 +77,21 @@ async fn slot_manager_opens_two_distinct_databases() {
 
     let mgr = SlotManager::new(connector_from(&dsn), 2);
 
-    let mut g1 = mgr.acquire("postgres").await.expect("acquire postgres");
-    let mut g2 = mgr.acquire("template1").await.expect("acquire template1");
+    let g1 = mgr.acquire("postgres").await.expect("acquire postgres");
+    let g2 = mgr.acquire("template1").await.expect("acquire template1");
 
-    let (db1,): (String,) = sqlx::query_as("SELECT current_database()")
-        .fetch_one(&mut *g1)
+    let row1 = g1
+        .query_one("SELECT current_database()", &[])
         .await
         .expect("current_database on g1");
+    let db1: &str = row1.get(0);
     assert_eq!(db1, "postgres");
 
-    let (db2,): (String,) = sqlx::query_as("SELECT current_database()")
-        .fetch_one(&mut *g2)
+    let row2 = g2
+        .query_one("SELECT current_database()", &[])
         .await
         .expect("current_database on g2");
+    let db2: &str = row2.get(0);
     assert_eq!(db2, "template1");
 
     drop(g1);
@@ -111,22 +111,24 @@ async fn slot_manager_lru_evicts_with_budget_one() {
     let g = mgr.acquire("postgres").await.expect("acquire postgres");
     drop(g);
 
-    let mut g = mgr.acquire("template1").await.expect("acquire template1");
-    let (db,): (String,) = sqlx::query_as("SELECT current_database()")
-        .fetch_one(&mut *g)
+    let g = mgr.acquire("template1").await.expect("acquire template1");
+    let row = g
+        .query_one("SELECT current_database()", &[])
         .await
         .expect("current_database after eviction");
+    let db: &str = row.get(0);
     assert_eq!(db, "template1");
     drop(g);
 
-    let mut g = mgr
+    let g = mgr
         .acquire("postgres")
         .await
         .expect("acquire postgres again");
-    let (db,): (String,) = sqlx::query_as("SELECT current_database()")
-        .fetch_one(&mut *g)
+    let row = g
+        .query_one("SELECT current_database()", &[])
         .await
         .expect("current_database after second eviction");
+    let db: &str = row.get(0);
     assert_eq!(db, "postgres");
     drop(g);
 

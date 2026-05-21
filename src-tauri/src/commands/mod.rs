@@ -10,11 +10,9 @@ use std::time::Instant;
 use secrecy::SecretString;
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::Column;
-use sqlx::Row;
-use sqlx::TypeInfo;
-use sqlx::postgres::PgRow;
 use tauri::State;
+use tokio_postgres::Row;
+use tokio_postgres::types::Type;
 
 use crate::pg::PgConnector;
 use crate::registry::{ServerHandle, ServerRegistry};
@@ -109,82 +107,105 @@ pub struct ColumnMeta {
 // Row → JSON conversion
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Convert a single `PgRow` into a `Vec<serde_json::Value>`.
+/// Convert a single tokio-postgres `Row` into a `Vec<serde_json::Value>`.
 ///
-/// Switches on the column's Postgres type name.  Unrecognised types fall
-/// back to a best-effort `String` representation — this function **never
+/// Switches on the column's Postgres type.  Unrecognised types fall
+/// back to a best-effort `&str` representation — this function **never
 /// errors**; the user always sees something.
-pub fn pg_row_to_json(row: &PgRow) -> Vec<Value> {
+pub fn pg_row_to_json(row: &Row) -> Vec<Value> {
     let columns = row.columns();
     let mut values = Vec::with_capacity(columns.len());
 
     for (i, col) in columns.iter().enumerate() {
-        let type_name = col.type_info().name();
-        let val = match type_name {
-            "BOOL" => row
-                .try_get::<bool, _>(i)
-                .map(Value::Bool)
-                .unwrap_or(Value::Null),
+        let val = match *col.type_() {
+            Type::BOOL => option_to_json(row.try_get::<_, Option<bool>>(i), Value::Bool),
+            Type::INT2 => option_to_json(row.try_get::<_, Option<i16>>(i), |v| {
+                Value::Number((v as i64).into())
+            }),
+            Type::INT4 => option_to_json(row.try_get::<_, Option<i32>>(i), |v| {
+                Value::Number((v as i64).into())
+            }),
+            Type::INT8 => option_to_json(row.try_get::<_, Option<i64>>(i), |v| {
+                Value::Number(v.into())
+            }),
+            Type::OID => option_to_json(row.try_get::<_, Option<u32>>(i), |v| {
+                Value::Number((v as i64).into())
+            }),
+            Type::FLOAT4 => option_to_json(row.try_get::<_, Option<f32>>(i), |v| {
+                serde_json::Number::from_f64(v as f64)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            }),
+            Type::FLOAT8 => option_to_json(row.try_get::<_, Option<f64>>(i), |v| {
+                serde_json::Number::from_f64(v)
+                    .map(Value::Number)
+                    .unwrap_or(Value::Null)
+            }),
 
-            "INT2" => row
-                .try_get::<i16, _>(i)
-                .map(|v| Value::Number((v as i64).into()))
-                .unwrap_or(Value::Null),
+            Type::JSON | Type::JSONB => option_to_json(row.try_get::<_, Option<Value>>(i), |v| v),
 
-            "INT4" => row
-                .try_get::<i32, _>(i)
-                .map(|v| Value::Number((v as i64).into()))
-                .unwrap_or(Value::Null),
+            Type::BYTEA => option_to_json(row.try_get::<_, Option<Vec<u8>>>(i), |bytes| {
+                use base64::Engine;
+                Value::String(base64::engine::general_purpose::STANDARD.encode(&bytes))
+            }),
 
-            "INT8" => row
-                .try_get::<i64, _>(i)
-                .map(|v| Value::Number(v.into()))
-                .unwrap_or(Value::Null),
+            Type::UUID => option_to_json(row.try_get::<_, Option<uuid::Uuid>>(i), |u| {
+                Value::String(u.to_string())
+            }),
 
-            "FLOAT4" => row
-                .try_get::<f32, _>(i)
-                .map(|v| {
-                    serde_json::Number::from_f64(v as f64)
-                        .map(Value::Number)
-                        .unwrap_or(Value::Null)
+            Type::DATE => option_to_json(row.try_get::<_, Option<chrono::NaiveDate>>(i), |d| {
+                Value::String(d.to_string())
+            }),
+            Type::TIME => option_to_json(row.try_get::<_, Option<chrono::NaiveTime>>(i), |t| {
+                Value::String(t.to_string())
+            }),
+            Type::TIMESTAMP => {
+                option_to_json(row.try_get::<_, Option<chrono::NaiveDateTime>>(i), |t| {
+                    Value::String(t.to_string())
                 })
-                .unwrap_or(Value::Null),
+            }
+            Type::TIMESTAMPTZ => option_to_json(
+                row.try_get::<_, Option<chrono::DateTime<chrono::Utc>>>(i),
+                |t| Value::String(t.to_rfc3339()),
+            ),
 
-            "FLOAT8" => row
-                .try_get::<f64, _>(i)
-                .map(|v| {
-                    serde_json::Number::from_f64(v)
-                        .map(Value::Number)
-                        .unwrap_or(Value::Null)
+            Type::NUMERIC => {
+                option_to_json(row.try_get::<_, Option<rust_decimal::Decimal>>(i), |d| {
+                    Value::String(d.to_string())
                 })
-                .unwrap_or(Value::Null),
+            }
 
-            "JSON" | "JSONB" => row.try_get::<Value, _>(i).unwrap_or(Value::Null),
-
-            "BYTEA" => row
-                .try_get::<Vec<u8>, _>(i)
-                .map(|bytes| {
-                    use base64::Engine;
-                    Value::String(base64::engine::general_purpose::STANDARD.encode(&bytes))
+            // Text-family types
+            Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME | Type::CHAR => {
+                option_to_json(row.try_get::<_, Option<&str>>(i), |s| {
+                    Value::String(s.to_string())
                 })
-                .unwrap_or(Value::Null),
+            }
 
-            "TEXT" | "VARCHAR" | "BPCHAR" | "CHAR" | "NAME" | "UUID" | "DATE" | "TIME"
-            | "TIMESTAMP" | "TIMESTAMPTZ" | "NUMERIC" | "OID" => row
-                .try_get::<String, _>(i)
-                .map(Value::String)
-                .unwrap_or(Value::Null),
-
-            // any unrecognised type — best-effort String fallback
-            _ => row
-                .try_get::<String, _>(i)
-                .map(Value::String)
-                .unwrap_or(Value::Null),
+            // Unknown — best-effort &str fallback.
+            _ => match row.try_get::<_, Option<&str>>(i) {
+                Ok(Some(s)) => Value::String(s.to_string()),
+                Ok(None) => Value::Null,
+                Err(_) => Value::Null,
+            },
         };
         values.push(val);
     }
 
     values
+}
+
+/// Tiny helper: collapse `Result<Option<T>, _>` into `serde_json::Value`
+/// via a converter for the `Some` branch.  `Err` and `None` both become
+/// `Value::Null` — the user always sees something.
+fn option_to_json<T, F: FnOnce(T) -> Value>(
+    r: Result<Option<T>, tokio_postgres::Error>,
+    f: F,
+) -> Value {
+    match r {
+        Ok(Some(v)) => f(v),
+        Ok(None) | Err(_) => Value::Null,
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -308,7 +329,7 @@ pub async fn run_query(
     let slot_manager = handle.slot_manager.clone();
     drop(handle);
 
-    let mut guard = slot_manager
+    let guard = slot_manager
         .acquire(&database)
         .await
         .map_err(|e: SlotError| CommandError::Slot(e.to_string()))?;
@@ -325,13 +346,12 @@ pub async fn run_query(
     }
 
     let start = Instant::now();
-    let rows: Vec<PgRow> = sqlx::query(&sql)
-        .fetch_all(&mut *guard)
+    let rows: Vec<Row> = guard
+        .query(&sql, &[])
         .await
         .map_err(|e| CommandError::Pg(e.to_string()))?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
-    // Extract column metadata from the first row (if any).
     let columns: Vec<ColumnMeta> = rows
         .first()
         .map(|r| {
@@ -339,7 +359,9 @@ pub async fn run_query(
                 .iter()
                 .map(|col| ColumnMeta {
                     name: col.name().to_string(),
-                    type_name: col.type_info().name().to_string(),
+                    // Emit uppercase type names ("INT4", "TEXT") for
+                    // backwards compatibility with the frontend.
+                    type_name: col.type_().name().to_uppercase(),
                 })
                 .collect()
         })
@@ -422,12 +444,12 @@ async fn run_introspection(
     let slot_manager = handle.slot_manager.clone();
     drop(handle);
 
-    let mut guard = slot_manager
+    let guard = slot_manager
         .acquire(database)
         .await
         .map_err(|e: SlotError| CommandError::Slot(e.to_string()))?;
 
-    Ok(introspect::introspect_database(&mut guard).await?)
+    Ok(introspect::introspect_database(&guard).await?)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -455,12 +477,12 @@ pub async fn list_databases(
     let slot_manager = handle.slot_manager.clone();
     drop(handle);
 
-    let mut guard = slot_manager
+    let guard = slot_manager
         .acquire(&conn.default_db)
         .await
         .map_err(|e: SlotError| CommandError::Slot(e.to_string()))?;
 
-    Ok(introspect::list_databases(&mut guard).await?)
+    Ok(introspect::list_databases(&guard).await?)
 }
 
 /// List schemas in `database` for `server_id`.  Cache-backed; on miss,

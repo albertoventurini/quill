@@ -11,12 +11,8 @@
 //!
 //! Without the env var, every test silently passes after a stderr note.
 
-use sqlx::Column;
-use sqlx::Connection;
-use sqlx::Row;
-use sqlx::postgres::PgRow;
-
 use secrecy::SecretString;
+use tokio_postgres::NoTls;
 
 use quill_lib::pg::PgConnector;
 use quill_lib::registry::{ServerHandle, ServerRegistry};
@@ -135,15 +131,12 @@ async fn full_cycle_store_to_disconnect() {
         let slot_manager = h.slot_manager.clone();
         drop(h);
 
-        let mut guard = slot_manager.acquire(&dsn.database).await.expect("acquire");
+        let guard = slot_manager.acquire(&dsn.database).await.expect("acquire");
 
-        let rows: Vec<PgRow> = sqlx::query("SELECT 1 AS one")
-            .fetch_all(&mut *guard)
-            .await
-            .expect("SELECT 1");
+        let rows = guard.query("SELECT 1 AS one", &[]).await.expect("SELECT 1");
 
         let col_name = rows[0].columns()[0].name().to_string();
-        let val: i32 = rows[0].try_get(0).expect("column 0 as i32");
+        let val: i32 = rows[0].try_get::<_, i32>(0).expect("column 0 as i32");
         assert_eq!(val, 1);
 
         drop(guard); // slot returns to idle
@@ -227,10 +220,13 @@ async fn pg_row_to_json_maps_int4_correctly() {
         "postgres://{}:{}@{}:{}/{}",
         dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
     );
-    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
 
-    let rows: Vec<PgRow> = sqlx::query("SELECT 1 AS num")
-        .fetch_all(&mut conn)
+    let rows = client
+        .query("SELECT 1 AS num", &[])
         .await
         .expect("SELECT 1");
 
@@ -253,10 +249,13 @@ async fn pg_row_to_json_maps_bool_correctly() {
         "postgres://{}:{}@{}:{}/{}",
         dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
     );
-    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
 
-    let rows: Vec<PgRow> = sqlx::query("SELECT true AS flag")
-        .fetch_all(&mut conn)
+    let rows = client
+        .query("SELECT true AS flag", &[])
         .await
         .expect("SELECT true");
 
@@ -280,10 +279,13 @@ async fn pg_row_to_json_maps_float_correctly() {
         "postgres://{}:{}@{}:{}/{}",
         dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
     );
-    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
 
-    let rows: Vec<PgRow> = sqlx::query("SELECT 3.14::float8 AS val")
-        .fetch_all(&mut conn)
+    let rows = client
+        .query("SELECT 3.14::float8 AS val", &[])
         .await
         .expect("SELECT 3.14::float8");
 
@@ -312,10 +314,13 @@ async fn pg_row_to_json_maps_text_correctly() {
         "postgres://{}:{}@{}:{}/{}",
         dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
     );
-    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
 
-    let rows: Vec<PgRow> = sqlx::query("SELECT 'hello'::text AS msg")
-        .fetch_all(&mut conn)
+    let rows = client
+        .query("SELECT 'hello'::text AS msg", &[])
         .await
         .expect("SELECT 'hello'::text");
 
@@ -338,10 +343,13 @@ async fn pg_row_to_json_maps_null_correctly() {
         "postgres://{}:{}@{}:{}/{}",
         dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
     );
-    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
 
-    let rows: Vec<PgRow> = sqlx::query("SELECT NULL::int4 AS nothing")
-        .fetch_all(&mut conn)
+    let rows = client
+        .query("SELECT NULL::int4 AS nothing", &[])
         .await
         .expect("SELECT NULL::int4");
 
@@ -370,9 +378,12 @@ async fn bare_select_returns_empty_row_from_postgres() {
         "postgres://{}:{}@{}:{}/{}",
         dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
     );
-    let mut conn = sqlx::PgConnection::connect(&url).await.expect("connect");
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
 
-    let result = sqlx::query("SELECT ").fetch_all(&mut conn).await;
+    let result = client.query("SELECT ", &[]).await;
 
     // Postgres treats bare SELECT as a valid query returning one empty row.
     let rows = result.expect("bare SELECT should succeed at the PG level");
