@@ -555,6 +555,70 @@ pub async fn refresh_schema_cache(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Cancellation
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Outcome of a `cancel_query` invocation.  `cancelled` counts how many
+/// CancelRequest packets we successfully dispatched; `errors` collects any
+/// per-handle failures.  v1 surfaces `errors` for debugging but the
+/// frontend can ignore them.
+#[derive(Debug, Serialize)]
+pub struct CancelOutcome {
+    pub cancelled: usize,
+    pub errors: Vec<String>,
+}
+
+/// Cancel every in-flight query on `server_id`, optionally filtered to
+/// queries running against `database`.
+///
+/// Does **not** acquire a slot.  Each cancel opens a fresh TCP connection
+/// to the server, sends the Postgres CancelRequest packet, and closes —
+/// AGENTS.md principle 1 still holds because the cancel is a *direct
+/// consequence of an explicit user action* (the Cancel button).
+#[tauri::command]
+pub async fn cancel_query(
+    server_id: i64,
+    database: Option<String>,
+    registry: State<'_, ServerRegistry>,
+) -> Result<CancelOutcome, CommandError> {
+    let handle = registry
+        .by_id
+        .get(&server_id)
+        .ok_or_else(|| CommandError::not_connected(server_id))?;
+
+    let slot_manager = handle.slot_manager.clone();
+    drop(handle); // release DashMap shard lock before awaiting
+
+    let handles = slot_manager.busy_cancel_handles(database.as_deref());
+
+    // Empty fan-out is a no-op success — easier for the frontend than an error.
+    if handles.is_empty() {
+        return Ok(CancelOutcome {
+            cancelled: 0,
+            errors: Vec::new(),
+        });
+    }
+
+    // Run every cancel concurrently.
+    let mut tasks = tokio::task::JoinSet::new();
+    for h in handles {
+        tasks.spawn(async move { h.cancel().await });
+    }
+
+    let mut cancelled = 0usize;
+    let mut errors: Vec<String> = Vec::new();
+    while let Some(joined) = tasks.join_next().await {
+        match joined {
+            Ok(Ok(())) => cancelled += 1,
+            Ok(Err(msg)) => errors.push(msg),
+            Err(join_err) => errors.push(format!("task panicked: {join_err}")),
+        }
+    }
+
+    Ok(CancelOutcome { cancelled, errors })
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Unit tests
 // ═══════════════════════════════════════════════════════════════════════════
 

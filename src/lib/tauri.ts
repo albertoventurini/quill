@@ -86,6 +86,13 @@ export type SchemaInfoPayload = {
 
 export type SchemaPayload = { v: number; schemas: SchemaInfoPayload[] };
 
+// ── Cancellation (mirrors commands::CancelOutcome) ──
+
+export type CancelOutcome = {
+  cancelled: number;
+  errors: string[];
+};
+
 // ── Error type (mirrors commands::CommandError serde tagging) ──
 
 export type CommandError = {
@@ -141,4 +148,7 @@ export const api = {
 
   refreshSchemaCache: (serverId: number, database: string) =>
     invoke<SchemaPayload>("refresh_schema_cache", { serverId, database }),
+
+  cancelQuery: (serverId: number, database: string | null = null) =>
+    invoke<CancelOutcome>("cancel_query", { serverId, database }),
 };
