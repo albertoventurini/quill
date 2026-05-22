@@ -75,7 +75,18 @@ export type RelationKind =
   | "matview"
   | "partitioned_table";
 
-export type RelationInfo = { name: string; kind: RelationKind };
+export type ColumnInfo = {
+  name: string;
+  type_name: string;
+  not_null: boolean;
+  position: number;
+};
+
+export type RelationInfo = {
+  name: string;
+  kind: RelationKind;
+  columns: ColumnInfo[];
+};
 
 export type FunctionKind =
   | "function"

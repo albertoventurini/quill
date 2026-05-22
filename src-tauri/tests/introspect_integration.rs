@@ -209,3 +209,94 @@ async fn introspect_database_serializes_to_json_string() {
 
     PgConnector::close(conn).await;
 }
+
+#[tokio::test]
+async fn introspect_database_returns_columns_for_relations() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+    let connector = connector_from(&dsn);
+    let (client, _cancel) = connector.connect(&dsn.database).await.expect("connect");
+
+    client.batch_execute("BEGIN").await.expect("begin");
+    client
+        .batch_execute("CREATE SCHEMA quill_m41_fixture")
+        .await
+        .expect("create schema");
+    client
+        .batch_execute(
+            "CREATE TABLE quill_m41_fixture.users (
+             id           integer NOT NULL,
+             email        text,
+             signup_at    timestamp with time zone NOT NULL
+         )",
+        )
+        .await
+        .expect("create table");
+    // A view with two projected columns to confirm views also report columns.
+    client
+        .batch_execute(
+            "CREATE VIEW quill_m41_fixture.user_emails AS
+             SELECT id, email FROM quill_m41_fixture.users",
+        )
+        .await
+        .expect("create view");
+
+    let payload = introspect::introspect_database(&client)
+        .await
+        .expect("introspect_database");
+
+    assert_eq!(payload.v, 2, "post-M4.1 payload version must be 2");
+
+    let schema = payload
+        .schemas
+        .iter()
+        .find(|s| s.name == "quill_m41_fixture")
+        .expect("fixture schema must appear");
+
+    let users = schema
+        .relations
+        .iter()
+        .find(|r| r.name == "users")
+        .expect("users table must appear");
+
+    assert_eq!(
+        users.columns.len(),
+        3,
+        "users has three columns; got {:?}",
+        users.columns
+    );
+
+    // Columns must be in attnum order.
+    assert_eq!(users.columns[0].name, "id");
+    assert_eq!(users.columns[0].type_name, "integer");
+    assert!(users.columns[0].not_null, "id is NOT NULL");
+    assert_eq!(users.columns[0].position, 1);
+
+    assert_eq!(users.columns[1].name, "email");
+    assert_eq!(users.columns[1].type_name, "text");
+    assert!(!users.columns[1].not_null, "email is nullable");
+    assert_eq!(users.columns[1].position, 2);
+
+    assert_eq!(users.columns[2].name, "signup_at");
+    assert_eq!(users.columns[2].type_name, "timestamp with time zone");
+    assert!(users.columns[2].not_null);
+    assert_eq!(users.columns[2].position, 3);
+
+    let view = schema
+        .relations
+        .iter()
+        .find(|r| r.name == "user_emails")
+        .expect("user_emails view must appear");
+    assert_eq!(
+        view.columns.len(),
+        2,
+        "view reports projected columns; got {:?}",
+        view.columns
+    );
+    assert_eq!(view.columns[0].name, "id");
+    assert_eq!(view.columns[1].name, "email");
+
+    client.batch_execute("ROLLBACK").await.expect("rollback");
+}

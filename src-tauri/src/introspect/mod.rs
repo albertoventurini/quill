@@ -19,7 +19,7 @@ use tokio_postgres::Client;
 
 /// Canonical version of the schema-cache payload.  Bumped only when the
 /// `SchemaPayload` wire shape changes in a way old payloads cannot satisfy.
-pub const PAYLOAD_VERSION: u32 = 1;
+pub const PAYLOAD_VERSION: u32 = 2;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -62,10 +62,29 @@ pub struct SchemaInfo {
     pub functions: Vec<FunctionInfo>,
 }
 
+/// One column of a table / view / matview / partitioned table.
+///
+/// `type_name` is the human-readable Postgres type, as returned by
+/// `format_type(atttypid, atttypmod)` — e.g. `"integer"`, `"varchar(255)"`,
+/// `"timestamp with time zone"`.  Autocomplete displays it next to the
+/// completion label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ColumnInfo {
+    pub name: String,
+    pub type_name: String,
+    pub not_null: bool,
+    /// 1-based ordinal position within the relation, matching `pg_attribute.attnum`.
+    pub position: i16,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelationInfo {
     pub name: String,
     pub kind: RelationKind,
+    /// Columns in `attnum` order.  Always populated since v2 — for views and
+    /// matviews this is the projected output columns; for partitioned tables
+    /// it's the parent's declared columns (partitions inherit them).
+    pub columns: Vec<ColumnInfo>,
 }
 
 /// Mirrors `pg_class.relkind` for the four kinds Quill exposes in v1.
@@ -152,14 +171,23 @@ pub async fn list_databases(client: &Client) -> Result<Vec<DatabaseInfo>, Intros
 
 /// Fetch the full schema payload for the currently-connected database.
 ///
-/// Issues three independent SQL queries serially over the same connection
-/// (schemas, relations, functions) and stitches them into a single
+/// Issues four independent SQL queries serially over the same connection
+/// (schemas, relations, columns, functions) and stitches them into a single
 /// `SchemaPayload`.  Schemas with no relations and no functions still
 /// appear (the user expects to see an empty schema as an empty folder).
 pub async fn introspect_database(client: &Client) -> Result<SchemaPayload, IntrospectError> {
     let schemas = list_schema_names(client).await?;
-    let relations = list_all_relations(client).await?;
+    let mut relations = list_all_relations(client).await?;
+    let mut columns_by_rel = list_all_columns(client).await?;
     let functions = list_all_functions(client).await?;
+
+    // Splice columns into their owning relations.  Relations not present in
+    // the columns map (e.g. a view that returns zero columns — unusual but
+    // legal) end up with `columns: Vec::new()`.
+    for (schema, rel) in relations.iter_mut() {
+        let key = (schema.clone(), rel.name.clone());
+        rel.columns = columns_by_rel.remove(&key).unwrap_or_default();
+    }
 
     let mut by_schema: std::collections::BTreeMap<String, SchemaInfo> = schemas
         .into_iter()
@@ -254,7 +282,58 @@ async fn list_all_relations(
             .next()
             .ok_or_else(|| IntrospectError::UnknownRelKind(String::from("")))?;
         let kind = RelationKind::from_pg(kind_char)?;
-        out.push((schema, RelationInfo { name, kind }));
+        out.push((
+            schema,
+            RelationInfo {
+                name,
+                kind,
+                columns: Vec::new(),
+            },
+        ));
+    }
+    Ok(out)
+}
+
+async fn list_all_columns(
+    client: &Client,
+) -> Result<std::collections::HashMap<(String, String), Vec<ColumnInfo>>, IntrospectError> {
+    let rows = client
+        .query(
+            r"SELECT n.nspname    AS schema,
+                     c.relname    AS table_name,
+                     a.attname    AS column_name,
+                     format_type(a.atttypid, a.atttypmod) AS type_name,
+                     a.attnotnull AS not_null,
+                     a.attnum     AS position
+              FROM pg_attribute a
+              JOIN pg_class      c ON a.attrelid = c.oid
+              JOIN pg_namespace  n ON c.relnamespace = n.oid
+              WHERE c.relkind IN ('r', 'v', 'm', 'p')
+                AND a.attnum > 0
+                AND NOT a.attisdropped
+                AND n.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+                AND n.nspname <> 'information_schema'
+              ORDER BY n.nspname, c.relname, a.attnum",
+            &[],
+        )
+        .await?;
+
+    let mut out: std::collections::HashMap<(String, String), Vec<ColumnInfo>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let schema: String = row.try_get::<_, &str>("schema")?.to_string();
+        let table: String = row.try_get::<_, &str>("table_name")?.to_string();
+        let name: String = row.try_get::<_, &str>("column_name")?.to_string();
+        let type_name: String = row.try_get::<_, &str>("type_name")?.to_string();
+        let not_null: bool = row.try_get("not_null")?;
+        let position: i16 = row.try_get("position")?;
+
+        out.entry((schema, table)).or_default().push(ColumnInfo {
+            name,
+            type_name,
+            not_null,
+            position,
+        });
     }
     Ok(out)
 }
@@ -309,10 +388,25 @@ mod tests {
                     RelationInfo {
                         name: "users".into(),
                         kind: RelationKind::Table,
+                        columns: vec![
+                            ColumnInfo {
+                                name: "id".into(),
+                                type_name: "integer".into(),
+                                not_null: true,
+                                position: 1,
+                            },
+                            ColumnInfo {
+                                name: "email".into(),
+                                type_name: "text".into(),
+                                not_null: false,
+                                position: 2,
+                            },
+                        ],
                     },
                     RelationInfo {
                         name: "user_emails".into(),
                         kind: RelationKind::View,
+                        columns: Vec::new(),
                     },
                 ],
                 functions: vec![FunctionInfo {
@@ -352,5 +446,10 @@ mod tests {
         assert!(RelationKind::from_pg('S').is_err()); // sequence
         assert!(RelationKind::from_pg('i').is_err()); // index
         assert!(RelationKind::from_pg('t').is_err()); // toast
+    }
+
+    #[test]
+    fn payload_version_is_two_in_m4() {
+        assert_eq!(PAYLOAD_VERSION, 2, "M4.1 bumps the payload version");
     }
 }
