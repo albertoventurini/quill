@@ -671,6 +671,21 @@ pub async fn rename_saved(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// File I/O
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Write a UTF-8 string to `path`.  Called from the CSV export flow
+/// after the user picks a destination via the OS save dialog.  The
+/// path is user-supplied; we don't validate it (the dialog already did).
+#[tauri::command]
+pub async fn write_text_file(path: String, content: String) -> Result<(), CommandError> {
+    tokio::fs::write(&path, content)
+        .await
+        .map_err(|e| CommandError::Store(format!("write {path}: {e}")))?;
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Cancellation
 // ═══════════════════════════════════════════════════════════════════════════
 

@@ -14,6 +14,8 @@
     loadingMore,
     onLoadMore,
     canLoadMore,
+    onExportCsv,
+    onCopyCsv,
   }: {
     columns: ColumnMeta[];
     rows: unknown[][];
@@ -22,6 +24,8 @@
     loadingMore: boolean;
     onLoadMore: () => void;
     canLoadMore: boolean;
+    onExportCsv: (sortedRows: unknown[][]) => void;
+    onCopyCsv: (sortedRows: unknown[][]) => void;
   } = $props();
 
   // ── Sort state (single-column tri-state: asc / desc / none) ──
@@ -61,6 +65,28 @@
       })
       .map((x) => x.r);
   });
+
+  // ── Context menu ──
+
+  let gridMenu = $state<{ x: number; y: number } | null>(null);
+
+  function openGridMenu(e: MouseEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    gridMenu = { x: e.clientX, y: e.clientY };
+  }
+  function closeGridMenu() {
+    gridMenu = null;
+  }
+
+  function exportAction() {
+    closeGridMenu();
+    onExportCsv(sortedRows);
+  }
+  function copyAction() {
+    closeGridMenu();
+    onCopyCsv(sortedRows);
+  }
 
   // ── Column widths (in px; null = let the browser compute) ──
 
@@ -134,7 +160,8 @@
 
 <div class="status-line">{statusLine}</div>
 
-<div class="grid-scroll">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="grid-scroll" oncontextmenu={openGridMenu}>
   <table>
     <thead>
       <tr>
@@ -180,6 +207,19 @@
   </table>
 </div>
 
+{#if gridMenu}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions a11y_click_events_have_key_events -->
+  <ul
+    class="grid-menu"
+    style="left: {gridMenu.x}px; top: {gridMenu.y}px;"
+    onclick={(e) => e.stopPropagation()}
+    oncontextmenu={(e) => e.preventDefault()}
+  >
+    <li><button class="menu-item" onclick={exportAction}>Export CSV…</button></li>
+    <li><button class="menu-item" onclick={copyAction}>Copy as CSV</button></li>
+  </ul>
+{/if}
+
 {#if hasMore}
   <div class="load-more-row">
     <button class="btn" onclick={onLoadMore} disabled={!canLoadMore || loadingMore}>
@@ -194,6 +234,8 @@
     <button class="btn">Close</button>
   </form>
 </dialog>
+
+<svelte:window onclick={closeGridMenu} />
 
 <style>
   .status-line {
@@ -311,4 +353,28 @@
     padding: 0.5rem;
     border-top: 1px solid #eee;
   }
+  .grid-menu {
+    position: fixed;
+    list-style: none;
+    margin: 0;
+    padding: 0.25rem 0;
+    background: white;
+    border: 1px solid #888;
+    border-radius: 4px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    min-width: 180px;
+    z-index: 100;
+  }
+  .menu-item {
+    display: block;
+    width: 100%;
+    padding: 0.35rem 0.75rem;
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.9rem;
+  }
+  .menu-item:hover { background: #e0e0ff; }
 </style>

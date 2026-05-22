@@ -264,4 +264,7 @@ export const api = {
 
   renameSaved: (id: number, newName: string) =>
     invoke<SavedQuery>("rename_saved", { id, newName }),
+
+  writeTextFile: (path: string, content: string) =>
+    invoke<void>("write_text_file", { path, content }),
 };

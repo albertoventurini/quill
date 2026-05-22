@@ -15,6 +15,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle();
             let pool = tauri::async_runtime::block_on(store::open(handle))?;
@@ -47,6 +48,7 @@ pub fn run() {
             commands::save_query,
             commands::delete_saved,
             commands::rename_saved,
+            commands::write_text_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
