@@ -201,6 +201,9 @@ export const api = {
   listFunctions: (serverId: number, database: string, schema: string) =>
     invoke<FunctionInfo[]>("list_functions", { serverId, database, schema }),
 
+  getSchemaPayload: (serverId: number, database: string) =>
+    invoke<SchemaPayload>("get_schema_payload", { serverId, database }),
+
   refreshSchemaCache: (serverId: number, database: string) =>
     invoke<void>("refresh_schema_cache", { serverId, database }),
 

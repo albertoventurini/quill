@@ -15,6 +15,7 @@
   import Tree from "$lib/Tree.svelte";
   import type { ServerNode, TreeNode, DatabaseNode } from "$lib/tree";
   import { clearDatabaseSubtree, errorMessage } from "$lib/tree";
+  import { clearServerSchemaPayloads } from "$lib/schemaStore";
 
   // ═════════════════ State ═════════════════
 
@@ -156,6 +157,7 @@
       active = null;
     }
     await api.disconnectServer(id);
+    clearServerSchemaPayloads(id);
     delete connectedState[id];
     const node = tree.find((n) => n.conn.id === id);
     if (node) {

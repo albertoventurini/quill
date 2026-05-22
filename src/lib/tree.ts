@@ -7,6 +7,7 @@
 //! the whole subtree on every state change prohibitive.
 
 import { api, type Connection, type RelationInfo, type FunctionInfo } from "./tauri";
+import { clearSchemaPayload } from "./schemaStore";
 
 // ── Node kinds ─────────────────────────────────────────────────────────
 
@@ -190,10 +191,14 @@ function buildGroups(
 }
 
 /** Clear all loaded children of a database (and below). Used by Refresh
- *  so the next expand re-reads from the (just-refreshed) cache. */
+ *  so the next expand re-reads from the (just-refreshed) cache.  Also
+ *  drops the M4.4 schema-store entry for the same `(serverId, database)`
+ *  so the autocomplete source picks up the refreshed payload on its next
+ *  trigger.  */
 export function clearDatabaseSubtree(node: DatabaseNode): void {
   node.children = null;
   node.expanded = false;
+  clearSchemaPayload(node.serverId, node.name);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────

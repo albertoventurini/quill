@@ -510,6 +510,20 @@ pub async fn list_functions(
         .unwrap_or_default())
 }
 
+/// Return the full schema payload for `(server_id, database)`.
+///
+/// On cache miss this acquires a slot and runs a full introspection (same
+/// path as `list_schemas`).  On hit it returns the cached payload at zero
+/// slot cost.  The frontend's `schemaStore` is the primary consumer.
+#[tauri::command]
+pub async fn get_schema_payload(
+    server_id: i64,
+    database: String,
+    registry: State<'_, ServerRegistry>,
+) -> Result<SchemaPayload, CommandError> {
+    ensure_payload(server_id, &database, &registry).await
+}
+
 /// Evict `database` from the session schema cache for `server_id`.
 ///
 /// The frontend calls `clearDatabaseSubtree` immediately after, which sets
