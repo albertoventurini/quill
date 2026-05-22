@@ -1,9 +1,11 @@
 pub mod commands;
+pub mod history;
 pub mod introspect;
 pub mod parse;
 pub mod pg;
 pub mod query;
 pub mod registry;
+pub mod saved;
 pub mod slots;
 pub mod store;
 
