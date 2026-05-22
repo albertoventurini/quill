@@ -8,23 +8,32 @@ use std::sync::Arc;
 
 use dashmap::DashMap;
 
+use crate::introspect::SchemaPayload;
 use crate::pg::PgConnector;
 use crate::slots::SlotManager;
 
 /// Live handle for one connected server.
 ///
-/// The `SlotManager` is wrapped in `Arc` so command handlers can clone it
-/// out of the map and use it without holding a `DashMap` shard lock across
-/// an `.await`.
+/// Both fields are `Arc`-wrapped so the handle can be cloned cheaply out of
+/// the registry's `DashMap` shard lock before any `.await`.
+///
+/// `schema_cache` is the session-scoped in-memory schema cache.  It is
+/// created empty when the user connects and discarded when they disconnect,
+/// so it can never be stale across restarts.  Within a session the first
+/// expand of a database populates the entry; subsequent expands of the same
+/// database (or of any of its schemas) return the cached payload at zero
+/// slot cost.
 #[derive(Clone)]
 pub struct ServerHandle {
     pub slot_manager: Arc<SlotManager<PgConnector>>,
+    pub schema_cache: Arc<DashMap<String, SchemaPayload>>,
 }
 
 impl ServerHandle {
     pub fn new(connector: PgConnector, budget: usize) -> Self {
         Self {
             slot_manager: Arc::new(SlotManager::new(connector, budget)),
+            schema_cache: Arc::new(DashMap::new()),
         }
     }
 }

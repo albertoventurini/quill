@@ -35,7 +35,6 @@ pub enum CommandError {
     Pg(String),
     Store(String),
     Introspect(String),
-    UnknownDatabase(String),
 }
 
 impl std::fmt::Display for CommandError {
@@ -46,8 +45,7 @@ impl std::fmt::Display for CommandError {
             | Self::Slot(msg)
             | Self::Pg(msg)
             | Self::Store(msg)
-            | Self::Introspect(msg)
-            | Self::UnknownDatabase(msg) => write!(f, "{msg}"),
+            | Self::Introspect(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -61,12 +59,6 @@ impl CommandError {
     }
     fn not_connected(id: i64) -> Self {
         Self::NotConnected(format!("not connected to server {id}"))
-    }
-    #[allow(dead_code)]
-    fn unknown_database(server_id: i64, database: &str) -> Self {
-        Self::UnknownDatabase(format!(
-            "database '{database}' is not cached for server {server_id}; expand it in the tree or call refresh_schema_cache"
-        ))
     }
 }
 
@@ -380,32 +372,36 @@ pub fn get_slot_state(
 
 use crate::introspect::{self, DatabaseInfo, FunctionInfo, RelationInfo, SchemaPayload};
 
-/// Fetch the payload for `(server_id, database)` from the local cache,
-/// or — on miss — acquire a slot, introspect the database, write the cache,
-/// and return the freshly-built payload.
+/// Return the schema payload for `(server_id, database)` from the
+/// session-scoped in-memory cache, or — on a miss — acquire a slot,
+/// introspect, populate the cache, and return the fresh payload.
 ///
-/// `ensure_payload` is the only path through which a schema-cache row is
-/// born on an implicit expand; the explicit `refresh_schema_cache` command
-/// bypasses the cache check and always re-introspects.
+/// The cache lives on `ServerHandle` and is created empty when the user
+/// connects; it is discarded on disconnect.  This means the data is always
+/// fresh at the start of each session and never stale across restarts.
+/// Within a session the first expand of a database populates the entry;
+/// all subsequent calls for the same database are zero-slot-cost lookups.
 async fn ensure_payload(
     server_id: i64,
     database: &str,
-    pool: &sqlx::SqlitePool,
     registry: &ServerRegistry,
 ) -> Result<SchemaPayload, CommandError> {
-    if let Some(row) = store::get_schema_cache(pool, server_id, database).await? {
-        let payload: SchemaPayload = serde_json::from_str(&row.payload_json)
-            .map_err(|e| CommandError::Introspect(format!("cached payload is unreadable: {e}")))?;
-        return Ok(payload);
+    // Clone the Arc out of the DashMap shard lock before any await.
+    let schema_cache = {
+        let handle = registry
+            .by_id
+            .get(&server_id)
+            .ok_or_else(|| CommandError::not_connected(server_id))?;
+        handle.schema_cache.clone()
+    };
+
+    if let Some(payload) = schema_cache.get(database) {
+        return Ok(payload.clone());
     }
 
-    // Cache miss — introspect.
+    // Cache miss — introspect and populate.
     let payload = run_introspection(server_id, database, registry).await?;
-
-    let json = serde_json::to_string(&payload)
-        .map_err(|e| CommandError::Introspect(format!("payload serialize failed: {e}")))?;
-    store::set_schema_cache(pool, server_id, database, &json).await?;
-
+    schema_cache.insert(database.to_string(), payload.clone());
     Ok(payload)
 }
 
@@ -465,31 +461,29 @@ pub async fn list_databases(
     Ok(introspect::list_databases(&guard).await?)
 }
 
-/// List schemas in `database` for `server_id`.  Cache-backed; on miss,
-/// fully introspects the database and writes the cache.
+/// List schemas in `database` for `server_id`.  Session-cache-backed; on
+/// miss, fully introspects the database and populates the in-memory cache.
 #[tauri::command]
 pub async fn list_schemas(
     server_id: i64,
     database: String,
-    pool: State<'_, sqlx::SqlitePool>,
     registry: State<'_, ServerRegistry>,
 ) -> Result<Vec<String>, CommandError> {
-    let payload = ensure_payload(server_id, &database, &pool, &registry).await?;
+    let payload = ensure_payload(server_id, &database, &registry).await?;
     Ok(payload.schemas.into_iter().map(|s| s.name).collect())
 }
 
 /// List tables / views / materialized views / partitioned tables in
-/// `schema` of `database` for `server_id`.  Cache-backed; returns an empty
-/// vec if the schema isn't present in the cached payload.
+/// `schema` of `database` for `server_id`.  Session-cache-backed; returns
+/// an empty vec if the schema isn't present in the payload.
 #[tauri::command]
 pub async fn list_relations(
     server_id: i64,
     database: String,
     schema: String,
-    pool: State<'_, sqlx::SqlitePool>,
     registry: State<'_, ServerRegistry>,
 ) -> Result<Vec<RelationInfo>, CommandError> {
-    let payload = ensure_payload(server_id, &database, &pool, &registry).await?;
+    let payload = ensure_payload(server_id, &database, &registry).await?;
     Ok(payload
         .schemas
         .into_iter()
@@ -499,16 +493,15 @@ pub async fn list_relations(
 }
 
 /// List functions / procedures / aggregates / windows in `schema` of
-/// `database` for `server_id`.  Cache-backed.
+/// `database` for `server_id`.  Session-cache-backed.
 #[tauri::command]
 pub async fn list_functions(
     server_id: i64,
     database: String,
     schema: String,
-    pool: State<'_, sqlx::SqlitePool>,
     registry: State<'_, ServerRegistry>,
 ) -> Result<Vec<FunctionInfo>, CommandError> {
-    let payload = ensure_payload(server_id, &database, &pool, &registry).await?;
+    let payload = ensure_payload(server_id, &database, &registry).await?;
     Ok(payload
         .schemas
         .into_iter()
@@ -517,21 +510,23 @@ pub async fn list_functions(
         .unwrap_or_default())
 }
 
-/// Force a fresh introspection of `database` on `server_id`, overwriting
-/// the cache row.  Returns the newly-cached payload so the caller can
-/// re-render without a second round-trip.
+/// Evict `database` from the session schema cache for `server_id`.
+///
+/// The frontend calls `clearDatabaseSubtree` immediately after, which sets
+/// `children = null` on the database tree node so the next expand triggers
+/// a fresh introspection via `ensure_payload`.
 #[tauri::command]
 pub async fn refresh_schema_cache(
     server_id: i64,
     database: String,
-    pool: State<'_, sqlx::SqlitePool>,
     registry: State<'_, ServerRegistry>,
-) -> Result<SchemaPayload, CommandError> {
-    let payload = run_introspection(server_id, &database, &registry).await?;
-    let json = serde_json::to_string(&payload)
-        .map_err(|e| CommandError::Introspect(format!("payload serialize failed: {e}")))?;
-    store::set_schema_cache(&pool, server_id, &database, &json).await?;
-    Ok(payload)
+) -> Result<(), CommandError> {
+    let handle = registry
+        .by_id
+        .get(&server_id)
+        .ok_or_else(|| CommandError::not_connected(server_id))?;
+    handle.schema_cache.remove(&database);
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

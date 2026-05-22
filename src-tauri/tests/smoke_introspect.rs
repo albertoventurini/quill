@@ -1,8 +1,8 @@
 //! Smoke test: full end-to-end flow through the introspection commands.
 //!
-//! Exercises the cache-miss → cache-hit → refresh cycle by calling the
-//! same internal pieces the `#[tauri::command]` wrappers use, in the same
-//! order, against a real Postgres + an in-memory SQLite store.
+//! Exercises the cache-miss → live-introspect cycle by calling the same
+//! internal pieces the `#[tauri::command]` wrappers use, in the same order,
+//! against a real Postgres + an in-memory SQLite store.
 //!
 //! Run with:
 //!   QUILL_TEST_PG_URL="postgres://postgres:dev@localhost:5432/postgres" ./test.sh
@@ -113,105 +113,40 @@ async fn list_databases_returns_postgres() {
     mgr.disconnect_all().await;
 }
 
+/// Verify that `introspect_database` produces a v1 payload with the expected
+/// `public` schema and that the payload survives a JSON round-trip — this is
+/// the same path `ensure_payload` takes on a session-cache miss.
 #[tokio::test]
-async fn ensure_payload_misses_then_hits() {
+async fn introspect_produces_valid_payload() {
     let Some(dsn) = dsn() else {
         skip_note();
         return;
     };
-    let (pool, registry, server_id) = fresh_pool_and_server(&dsn).await;
+    let (_pool, registry, server_id) = fresh_pool_and_server(&dsn).await;
 
-    // Cache is empty.
-    assert!(
-        store::get_schema_cache(&pool, server_id, &dsn.database)
-            .await
-            .unwrap()
-            .is_none()
-    );
-
-    // ── Cache-miss path: replicate `ensure_payload` inline ────────────
     let handle = registry.by_id.get(&server_id).expect("handle");
     let mgr = handle.slot_manager.clone();
     drop(handle);
 
     let guard = mgr.acquire(&dsn.database).await.expect("acquire");
-    let payload1 = introspect::introspect_database(&guard)
+    let payload = introspect::introspect_database(&guard)
         .await
         .expect("introspect");
     drop(guard);
 
-    let json = serde_json::to_string(&payload1).expect("serialize");
-    store::set_schema_cache(&pool, server_id, &dsn.database, &json)
-        .await
-        .expect("set_schema_cache");
-
-    // Cache now populated.
-    let row = store::get_schema_cache(&pool, server_id, &dsn.database)
-        .await
-        .unwrap()
-        .expect("row exists");
-    assert!(!row.fetched_at.is_empty());
-
-    // ── Cache-hit path: deserialize the row, should match ─────────────
-    let payload2: introspect::SchemaPayload =
-        serde_json::from_str(&row.payload_json).expect("deserialize");
-    assert_eq!(payload1, payload2);
-    assert_eq!(payload2.v, PAYLOAD_VERSION);
-
-    mgr.disconnect_all().await;
-}
-
-#[tokio::test]
-async fn refresh_overwrites_existing_cache() {
-    let Some(dsn) = dsn() else {
-        skip_note();
-        return;
-    };
-    let (pool, registry, server_id) = fresh_pool_and_server(&dsn).await;
-
-    // Seed a deliberately-bogus payload so we can verify it gets replaced.
-    store::set_schema_cache(
-        &pool,
-        server_id,
-        &dsn.database,
-        r#"{"v":1,"schemas":[{"name":"stale","relations":[],"functions":[]}]}"#,
-    )
-    .await
-    .expect("seed");
-
-    let before = store::get_schema_cache(&pool, server_id, &dsn.database)
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(before.payload_json.contains("stale"));
-
-    // Refresh.
-    let handle = registry.by_id.get(&server_id).expect("handle");
-    let mgr = handle.slot_manager.clone();
-    drop(handle);
-
-    let guard = mgr.acquire(&dsn.database).await.expect("acquire");
-    let fresh = introspect::introspect_database(&guard)
-        .await
-        .expect("introspect");
-    drop(guard);
-
-    let json = serde_json::to_string(&fresh).expect("serialize");
-    store::set_schema_cache(&pool, server_id, &dsn.database, &json)
-        .await
-        .expect("overwrite");
-
-    let after = store::get_schema_cache(&pool, server_id, &dsn.database)
-        .await
-        .unwrap()
-        .unwrap();
+    // Basic shape assertions.
+    assert_eq!(payload.v, PAYLOAD_VERSION);
     assert!(
-        !after.payload_json.contains(r#""stale""#),
-        "stale schema should have been overwritten; got: {}",
-        after.payload_json
+        payload.schemas.iter().any(|s| s.name == "public"),
+        "public schema must exist; got {:?}",
+        payload.schemas.iter().map(|s| &s.name).collect::<Vec<_>>()
     );
-    // `public` is on every stock cluster — useful sentinel for "real".
-    assert!(after.payload_json.contains("public"));
+
+    // JSON round-trip (same path as session-cache insert/read).
+    let json = serde_json::to_string(&payload).expect("serialize");
+    let back: quill_lib::introspect::SchemaPayload =
+        serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(payload, back);
 
     mgr.disconnect_all().await;
 }
@@ -223,10 +158,4 @@ async fn command_error_introspect_serde_shape() {
     let json = serde_json::to_value(err).expect("serialize");
     assert_eq!(json["kind"], "Introspect");
     assert_eq!(json["message"], "boom");
-
-    let err = quill_lib::commands::CommandError::UnknownDatabase(
-        "database 'nope' is not cached for server 1".into(),
-    );
-    let json = serde_json::to_value(err).expect("serialize");
-    assert_eq!(json["kind"], "UnknownDatabase");
 }

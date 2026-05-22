@@ -109,8 +109,7 @@ export type CommandError = {
     | "Slot"
     | "Pg"
     | "Store"
-    | "Introspect"
-    | "UnknownDatabase";
+    | "Introspect";
   message: string;
 };
 
@@ -165,7 +164,7 @@ export const api = {
     invoke<FunctionInfo[]>("list_functions", { serverId, database, schema }),
 
   refreshSchemaCache: (serverId: number, database: string) =>
-    invoke<SchemaPayload>("refresh_schema_cache", { serverId, database }),
+    invoke<void>("refresh_schema_cache", { serverId, database }),
 
   cancelQuery: (serverId: number, database: string | null = null) =>
     invoke<CancelOutcome>("cancel_query", { serverId, database }),

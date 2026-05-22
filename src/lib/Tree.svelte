@@ -107,19 +107,27 @@
     </button>
   </div>
 
-  {#if "expanded" in node && node.expanded && "children" in node && node.children}
-    <div class="children">
-      {#each node.children as child (childKey(child))}
-        <!-- svelte-ignore svelte_self_deprecated -->
-        <svelte:self
-          node={child}
-          {isConnected}
-          {selectedDb}
-          {onSelectDb}
-          {onContextMenu}
-        />
-      {/each}
-    </div>
+  {#if "expanded" in node && node.expanded && "children" in node}
+    {#if node.children === null}
+      <!-- not yet loaded; loading spinner above handles feedback -->
+    {:else if node.children.length === 0 && node.kind === "schema" && !node.loading}
+      <div class="children">
+        <span class="empty-hint">No tables or functions — right-click to Refresh schema</span>
+      </div>
+    {:else if node.children.length > 0}
+      <div class="children">
+        {#each node.children as child (childKey(child))}
+          <!-- svelte-ignore svelte_self_deprecated -->
+          <svelte:self
+            node={child}
+            {isConnected}
+            {selectedDb}
+            {onSelectDb}
+            {onContextMenu}
+          />
+        {/each}
+      </div>
+    {/if}
   {/if}
 </div>
 
@@ -178,6 +186,14 @@
   .label { flex: 1; }
   .loading { color: #888; font-style: italic; }
   .error { color: #cc0000; font-weight: bold; cursor: help; }
+  .empty-hint {
+    display: block;
+    font-size: 0.8rem;
+    color: #888;
+    font-style: italic;
+    padding: 0.15rem 0.3rem;
+    user-select: none;
+  }
   .children {
     padding-left: 1.2rem;
     border-left: 1px solid #e0e0e0;
