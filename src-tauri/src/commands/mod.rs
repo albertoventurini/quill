@@ -530,6 +530,21 @@ pub async fn refresh_schema_cache(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Completion analysis
+// ═══════════════════════════════════════════════════════════════════════════
+
+use crate::parse::{self, CompletionContext};
+
+/// Analyze the SQL buffer at the given UTF-8 byte offset.
+///
+/// Pure, sync; Tauri runs sync handlers on a blocking pool.  No Postgres
+/// connection is acquired.
+#[tauri::command]
+pub fn analyze_completion(sql: String, cursor: usize) -> CompletionContext {
+    parse::analyze_completion(&sql, cursor)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Cancellation
 // ═══════════════════════════════════════════════════════════════════════════
 

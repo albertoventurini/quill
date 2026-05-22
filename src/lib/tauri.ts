@@ -108,6 +108,29 @@ export type SchemaPayload = {
   search_path: string[];
 };
 
+// ── Completion analysis (mirrors parse::*) ──
+
+export type CompletionKind =
+  | "none"
+  | "from_item"
+  | "qualified_relation"
+  | "qualified_column"
+  | "unqualified";
+
+export type ScopeTable = {
+  schema: string | null;
+  name: string;
+  alias: string | null;
+};
+
+export type CompletionContext = {
+  kind: CompletionKind;
+  qualifier: string | null;
+  prefix: string;
+  from_offset: number;
+  scope_tables: ScopeTable[];
+};
+
 // ── Cancellation (mirrors commands::CancelOutcome) ──
 
 export type CancelOutcome = {
@@ -183,4 +206,7 @@ export const api = {
 
   cancelQuery: (serverId: number, database: string | null = null) =>
     invoke<CancelOutcome>("cancel_query", { serverId, database }),
+
+  analyzeCompletion: (sql: string, cursor: number) =>
+    invoke<CompletionContext>("analyze_completion", { sql, cursor }),
 };

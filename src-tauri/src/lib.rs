@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod introspect;
+pub mod parse;
 pub mod pg;
 pub mod query;
 pub mod registry;
@@ -36,6 +37,7 @@ pub fn run() {
             commands::cancel_query, // M3.3
             commands::fetch_more,
             commands::close_result,
+            commands::analyze_completion,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
