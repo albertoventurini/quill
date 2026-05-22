@@ -54,28 +54,6 @@
     view?.focus();
   }
 
-  function makeRunKeymap() {
-    return keymap.of([
-      {
-        key: "Mod-Enter",
-        preventDefault: true,
-        run: (v) => {
-          const doc = v.state.doc.toString();
-          const cursor = v.state.selection.main.head;
-          const sel = v.state.selection.main;
-          const picked = statementAtCursor(doc, cursor, {
-            from: sel.from,
-            to: sel.to,
-          });
-          if (picked && picked.text.length > 0) {
-            onRun(picked);
-          }
-          return true;
-        },
-      },
-    ]);
-  }
-
   onMount(() => {
     if (!host) return;
 
@@ -95,12 +73,28 @@
           activateOnTyping: true,
         }),
         keymap.of([
-          ...defaultKeymap,
+          ...defaultKeymap.filter((k) => k.key !== "Mod-Enter"),
           ...historyKeymap,
           ...searchKeymap,
           indentWithTab,
+          {
+            key: "Mod-Enter",
+            preventDefault: true,
+            run: (v) => {
+              const doc = v.state.doc.toString();
+              const cursor = v.state.selection.main.head;
+              const sel = v.state.selection.main;
+              const picked = statementAtCursor(doc, cursor, {
+                from: sel.from,
+                to: sel.to,
+              });
+              if (picked && picked.text.length > 0) {
+                onRun(picked);
+              }
+              return true;
+            },
+          },
         ]),
-        makeRunKeymap(),
         EditorView.updateListener.of((u) => {
           if (u.docChanged) onChange(u.state.doc.toString());
         }),
