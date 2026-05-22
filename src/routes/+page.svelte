@@ -5,8 +5,11 @@
     type NewConnection,
     type SlotState,
     type RunResult,
+    type ChunkResult,
     type CommandError,
+    type ColumnMeta,
   } from "$lib/tauri";
+  import ResultGrid from "$lib/ResultGrid.svelte";
   import Editor from "$lib/Editor.svelte";
   import { statementAtCursor } from "$lib/statement";
   import Tree from "$lib/Tree.svelte";
@@ -45,8 +48,17 @@
   // SQL form (kept from M1.6).
   let sql = $state("SELECT 1");
   let runningQuery = $state(false);
-  let result = $state<RunResult | { error: CommandError } | null>(null);
-  let currentResultId = $state<string | null>(null);
+  type ActiveResult = {
+    resultId: string;
+    columns: ColumnMeta[];
+    rows: unknown[][];
+    hasMore: boolean;
+    rowCount: number;
+    durationMs: number;
+  };
+  let active = $state<ActiveResult | null>(null);
+  let lastError = $state<CommandError | null>(null);
+  let loadingMore = $state(false);
   let editor = $state<Editor | undefined>(undefined);
   let editorWarning = $state<string | null>(null);
 
@@ -140,9 +152,11 @@
   }
 
   async function disconnect(id: number) {
+    if (active && selectedDb?.serverId === id) {
+      active = null;
+    }
     await api.disconnectServer(id);
     delete connectedState[id];
-    // Collapse the tree subtree for this server so a future Connect starts fresh.
     const node = tree.find((n) => n.conn.id === id);
     if (node) {
       node.children = null;
@@ -191,7 +205,14 @@
 
   // ═════════════════ Selection ═════════════════
 
-  function selectDb(serverId: number, database: string) {
+  async function selectDb(serverId: number, database: string) {
+    if (
+      active &&
+      selectedDb &&
+      (selectedDb.serverId !== serverId || selectedDb.database !== database)
+    ) {
+      await closeActive();
+    }
     selectedDb = { serverId, database };
   }
 
@@ -294,29 +315,96 @@
     if (!selectedDb || !isConnected(selectedDb.serverId) || !payload.text.trim() || runningQuery) {
       return;
     }
+
+    await closeActive();
+
     runningQuery = true;
-    result = null;
-
-    // Close the previous cursor before opening a new one,
-    // so we don't exhaust the slot budget.
-    if (currentResultId) {
-      try {
-        await api.closeResult(currentResultId);
-      } catch {
-        // cursor may already be closed — ignore
-      }
-      currentResultId = null;
-    }
-
+    lastError = null;
     try {
-      const r = await api.runQuery(selectedDb.serverId, selectedDb.database, payload.text);
-      currentResultId = r.result_id;
-      result = r;
+      const r: RunResult = await api.runQuery(
+        selectedDb.serverId,
+        selectedDb.database,
+        payload.text,
+      );
+      active = {
+        resultId: r.result_id,
+        columns: r.columns,
+        rows: r.first_chunk,
+        hasMore: r.has_more,
+        rowCount: r.row_count_so_far,
+        durationMs: r.duration_ms_so_far,
+      };
     } catch (err) {
-      result = { error: err as CommandError };
+      lastError = err as CommandError;
     } finally {
       runningQuery = false;
     }
+    if (selectedDb) await refreshSlotState(selectedDb.serverId);
+  }
+
+  async function loadMore() {
+    if (!active || loadingMore) return;
+    loadingMore = true;
+    try {
+      const chunk: ChunkResult = await api.fetchMore(active.resultId);
+      active.rows = [...active.rows, ...chunk.rows];
+      active.hasMore = chunk.has_more;
+      active.rowCount = chunk.row_count_so_far;
+      active.durationMs = chunk.duration_ms_so_far;
+      if (!chunk.has_more) {
+        active.resultId = "";
+      }
+    } catch (err) {
+      lastError = err as CommandError;
+      active = null;
+    } finally {
+      loadingMore = false;
+    }
+    if (selectedDb) await refreshSlotState(selectedDb.serverId);
+  }
+
+  async function closeActive() {
+    if (!active) return;
+    const rid = active.resultId;
+    active = null;
+    lastError = null;
+    if (rid) {
+      try {
+        await api.closeResult(rid);
+      } catch {
+        // Best-effort; ignore.
+      }
+    }
+    if (selectedDb) await refreshSlotState(selectedDb.serverId);
+  }
+
+  async function cancelRunning() {
+    if (!selectedDb) return;
+    try {
+      await api.cancelQuery(selectedDb.serverId, selectedDb.database);
+    } catch (err) {
+      lastError = err as CommandError;
+    }
+    if (selectedDb) await refreshSlotState(selectedDb.serverId);
+  }
+
+  async function refreshSlotState(serverId: number) {
+    const s = await api.getSlotState(serverId);
+    if (s) connectedState[serverId] = s;
+  }
+
+  function statusLineText(a: ActiveResult): string {
+    const slot = connectedState[selectedDb!.serverId];
+    const busy = slot ? slot.slots.filter((s) => s.busy).length : 0;
+    const budget = slot ? slot.budget : 0;
+    const parts = [
+      `${a.rowCount.toLocaleString()} rows`,
+      `${a.durationMs}ms`,
+      `slot [${busy}/${budget}]`,
+      `${selectedConn?.name ?? "?"}@${selectedDb!.database}`,
+      a.hasMore ? "cursor open" : "cursor closed",
+    ];
+    return parts.join(" · ");
   }
 
   let canRun = $derived(
@@ -325,28 +413,6 @@
       sql.trim().length > 0 &&
       !runningQuery,
   );
-
-  function renderResult(r: RunResult): string {
-    if (r.columns.length === 0)
-      return `(no columns)\n${r.row_count_so_far} rows, ${r.duration_ms_so_far}ms`;
-    const header = r.columns.map((c) => c.name).join("\t");
-    const lines = r.first_chunk.map((row) =>
-      row
-        .map((cell) => {
-          if (cell === null) return "NULL";
-          if (typeof cell === "object") return JSON.stringify(cell);
-          return String(cell);
-        })
-        .join("\t"),
-    );
-    return [
-      header,
-      ...lines,
-      "",
-      `${r.row_count_so_far} rows so far in ${r.duration_ms_so_far}ms`
-        + (r.has_more ? " (more available — Load-more UI in M3.6)" : ""),
-    ].join("\n");
-  }
 </script>
 
 <svelte:window onclick={closeMenu} oncontextmenu={(e) => { if (!menu) return; e.preventDefault(); closeMenu(); }} />
@@ -394,28 +460,48 @@
         onRun={(payload) => runFromEditor(payload)}
       />
 
-      {#if editorWarning}
-        <p class="muted">{editorWarning}</p>
-      {/if}
-
-      <div class="run-row">
+      <div class="action-row">
         <button class="btn" onclick={() => runFromEditor(buildPayloadFromButton())} disabled={!canRun}>
           {runningQuery ? "Running…" : "Run (Ctrl/Cmd+Enter)"}
         </button>
+
+        <button
+          class="btn"
+          onclick={cancelRunning}
+          disabled={!runningQuery && !active}
+        >Cancel</button>
+
+        {#if active}
+          <button class="btn" onclick={closeActive}>Close result</button>
+        {/if}
       </div>
+
+      {#if editorWarning}
+        <p class="muted inline">{editorWarning}</p>
+      {/if}
+      {#if lastError}
+        <p class="inline error">
+          <span class="err-badge">{lastError.kind}</span>
+          {lastError.message}
+        </p>
+      {/if}
+
+      {#if active}
+        <ResultGrid
+          columns={active.columns}
+          rows={active.rows}
+          statusLine={statusLineText(active)}
+          hasMore={active.hasMore}
+          loadingMore={loadingMore}
+          onLoadMore={loadMore}
+          canLoadMore={!!active.resultId}
+        />
+      {:else if !runningQuery && !lastError}
+        <p class="muted">No active result. Press Run or Ctrl/Cmd+Enter.</p>
+      {/if}
 
       {#if !isConnected(sd.serverId)}
         <p class="muted">Not connected. Right-click the server in the tree → Connect.</p>
-      {/if}
-
-      {#if result}
-        <div class="result-area">
-          {#if "error" in result}
-            <pre class="error">[{result.error.kind}] {result.error.message}</pre>
-          {:else}
-            <pre>{renderResult(result)}</pre>
-          {/if}
-        </div>
       {/if}
     {:else}
       <p class="muted">Select a database in the tree (left) to start querying.</p>
@@ -509,10 +595,19 @@
 
   .input { padding: 0.35rem; border: 1px solid #aaa; border-radius: 4px; font: inherit; box-sizing: border-box; }
 
-  .run-row { display: flex; align-items: center; gap: 0.5rem; }
-
-  .result-area { border-top: 1px solid #ccc; padding-top: 0.5rem; }
-  .result-area pre { margin: 0; font: 13px monospace; white-space: pre-wrap; }
+  .action-row { display: flex; gap: 0.5rem; align-items: center; }
+  .inline { margin: 0.25rem 0; }
+  .inline.error { color: #b00020; font-size: 0.9rem; }
+  .err-badge {
+    display: inline-block;
+    padding: 0 0.35rem;
+    margin-right: 0.4rem;
+    border-radius: 3px;
+    background: #b00020;
+    color: white;
+    font-size: 0.75rem;
+    text-transform: uppercase;
+  }
   .error { color: #cc0000; }
 
   .modal { border: 1px solid #888; border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; }
