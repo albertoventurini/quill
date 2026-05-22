@@ -1,5 +1,3 @@
-#![allow(dead_code)] // M5.2 wires the call sites.
-
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use thiserror::Error;

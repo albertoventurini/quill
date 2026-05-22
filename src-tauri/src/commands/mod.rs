@@ -35,6 +35,7 @@ pub enum CommandError {
     Pg(String),
     Store(String),
     Introspect(String),
+    Saved(String),
 }
 
 impl std::fmt::Display for CommandError {
@@ -45,7 +46,8 @@ impl std::fmt::Display for CommandError {
             | Self::Slot(msg)
             | Self::Pg(msg)
             | Self::Store(msg)
-            | Self::Introspect(msg) => write!(f, "{msg}"),
+            | Self::Introspect(msg)
+            | Self::Saved(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -71,6 +73,18 @@ impl From<store::StoreError> for CommandError {
 impl From<crate::introspect::IntrospectError> for CommandError {
     fn from(e: crate::introspect::IntrospectError) -> Self {
         Self::Introspect(e.to_string())
+    }
+}
+
+impl From<crate::history::HistoryError> for CommandError {
+    fn from(e: crate::history::HistoryError) -> Self {
+        Self::Store(e.to_string())
+    }
+}
+
+impl From<crate::saved::SavedError> for CommandError {
+    fn from(e: crate::saved::SavedError) -> Self {
+        Self::Saved(e.to_string())
     }
 }
 
@@ -292,12 +306,18 @@ pub async fn disconnect_server(
 /// Run a SQL query against a connected server.  Opens a server-side cursor
 /// and returns the first chunk (default 1000 rows).  Subsequent chunks are
 /// fetched via [`fetch_more`]; the cursor is closed with [`close_result`].
+///
+/// Every call appends one row to `query_history` — on success with the
+/// time-to-first-chunk and the row's `ok=true`; on failure with the time
+/// elapsed before the error and `ok=false`.  History failures are logged
+/// and swallowed — they never alter the response visible to the user.
 #[tauri::command]
 pub async fn run_query(
     server_id: i64,
     database: String,
     sql: String,
     chunk_size: Option<usize>,
+    pool: State<'_, sqlx::SqlitePool>,
     registry: State<'_, ServerRegistry>,
     results: State<'_, ResultRegistry>,
 ) -> Result<RunResult, CommandError> {
@@ -309,9 +329,42 @@ pub async fn run_query(
     drop(handle);
 
     let chunk = chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
-    query::run_query(server_id, &database, &sql, chunk, slot_manager, &results)
-        .await
-        .map_err(map_query_err)
+
+    let start = std::time::Instant::now();
+
+    let outcome = query::run_query(server_id, &database, &sql, chunk, slot_manager, &results).await;
+
+    let (record, response) = match outcome {
+        Ok(run) => {
+            let record = NewHistoryRecord {
+                server_id,
+                database: database.clone(),
+                sql: sql.clone(),
+                duration_ms: run.duration_ms_so_far as i64,
+                ok: true,
+                error: None,
+            };
+            (record, Ok(run))
+        }
+        Err(e) => {
+            let err = map_query_err(e);
+            let record = NewHistoryRecord {
+                server_id,
+                database: database.clone(),
+                sql: sql.clone(),
+                duration_ms: start.elapsed().as_millis() as i64,
+                ok: false,
+                error: Some(err.to_string()),
+            };
+            (record, Err(err))
+        }
+    };
+
+    if let Err(history_err) = history::append(&pool, record).await {
+        eprintln!("history::append failed: {history_err}");
+    }
+
+    response
 }
 
 #[tauri::command]
@@ -556,6 +609,65 @@ use crate::parse::{self, CompletionContext};
 #[tauri::command]
 pub fn analyze_completion(sql: String, cursor: usize) -> CompletionContext {
     parse::analyze_completion(&sql, cursor)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// History
+// ═══════════════════════════════════════════════════════════════════════════
+
+use crate::history::{self, HistoryFilter, HistoryRecord, NewHistoryRecord};
+
+#[tauri::command]
+pub async fn list_history(
+    limit: Option<i64>,
+    server_id: Option<i64>,
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<Vec<HistoryRecord>, CommandError> {
+    let lim = limit.unwrap_or(history::HISTORY_RETENTION as i64);
+    Ok(history::list(&pool, lim, HistoryFilter { server_id }).await?)
+}
+
+#[tauri::command]
+pub async fn clear_history(pool: State<'_, sqlx::SqlitePool>) -> Result<(), CommandError> {
+    history::clear(&pool).await?;
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Saved queries
+// ═══════════════════════════════════════════════════════════════════════════
+
+use crate::saved::{self, NewSavedQuery, SavedQuery};
+
+#[tauri::command]
+pub async fn list_saved(
+    server_id: Option<i64>,
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<Vec<SavedQuery>, CommandError> {
+    Ok(saved::list(&pool, server_id).await?)
+}
+
+#[tauri::command]
+pub async fn save_query(
+    new: NewSavedQuery,
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<SavedQuery, CommandError> {
+    Ok(saved::create(&pool, new).await?)
+}
+
+#[tauri::command]
+pub async fn delete_saved(id: i64, pool: State<'_, sqlx::SqlitePool>) -> Result<(), CommandError> {
+    saved::delete(&pool, id).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn rename_saved(
+    id: i64,
+    new_name: String,
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<SavedQuery, CommandError> {
+    Ok(saved::rename(&pool, id, &new_name).await?)
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -138,6 +138,39 @@ export type CancelOutcome = {
   errors: string[];
 };
 
+// ── History (mirrors history::HistoryRecord) ──
+
+export type HistoryRecord = {
+  id: number;
+  ts: string;
+  server_id: number;
+  database: string;
+  sql: string;
+  duration_ms: number;
+  ok: boolean;
+  error: string | null;
+};
+
+// ── Saved queries (mirrors saved::SavedQuery / NewSavedQuery) ──
+
+export type SavedScope = "global" | "server";
+
+export type SavedQuery = {
+  id: number;
+  name: string;
+  scope: SavedScope;
+  server_id: number | null;
+  sql: string;
+  created_at: string;
+};
+
+export type NewSavedQuery = {
+  name: string;
+  scope: SavedScope;
+  server_id: number | null;
+  sql: string;
+};
+
 // ── Error type (mirrors commands::CommandError serde tagging) ──
 
 export type CommandError = {
@@ -147,7 +180,8 @@ export type CommandError = {
     | "Slot"
     | "Pg"
     | "Store"
-    | "Introspect";
+    | "Introspect"
+    | "Saved";
   message: string;
 };
 
@@ -212,4 +246,22 @@ export const api = {
 
   analyzeCompletion: (sql: string, cursor: number) =>
     invoke<CompletionContext>("analyze_completion", { sql, cursor }),
+
+  listHistory: (limit: number | null = null, serverId: number | null = null) =>
+    invoke<HistoryRecord[]>("list_history", { limit, serverId }),
+
+  clearHistory: () =>
+    invoke<void>("clear_history"),
+
+  listSaved: (serverId: number | null = null) =>
+    invoke<SavedQuery[]>("list_saved", { serverId }),
+
+  saveQuery: (newQuery: NewSavedQuery) =>
+    invoke<SavedQuery>("save_query", { new: newQuery }),
+
+  deleteSaved: (id: number) =>
+    invoke<void>("delete_saved", { id }),
+
+  renameSaved: (id: number, newName: string) =>
+    invoke<SavedQuery>("rename_saved", { id, newName }),
 };

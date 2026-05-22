@@ -1,5 +1,3 @@
-#![allow(dead_code)] // M5.2 wires the call sites.
-
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use thiserror::Error;
@@ -50,6 +48,7 @@ pub struct SavedQuery {
     /// Stored as TEXT in SQLite ('global' | 'server'); deserialized into the
     /// enum via the `scope_str` field below.  See `from_row_with_scope`.
     #[sqlx(rename = "scope")]
+    #[serde(rename = "scope")]
     pub scope_str: String,
     pub server_id: Option<i64>,
     pub sql: String,
