@@ -7,6 +7,8 @@
     type RunResult,
     type CommandError,
   } from "$lib/tauri";
+  import Editor from "$lib/Editor.svelte";
+  import { statementAtCursor } from "$lib/statement";
   import Tree from "$lib/Tree.svelte";
   import type { ServerNode, TreeNode, DatabaseNode } from "$lib/tree";
   import { clearDatabaseSubtree, errorMessage } from "$lib/tree";
@@ -45,6 +47,8 @@
   let runningQuery = $state(false);
   let result = $state<RunResult | { error: CommandError } | null>(null);
   let currentResultId = $state<string | null>(null);
+  let editor = $state<Editor | undefined>(undefined);
+  let editorWarning = $state<string | null>(null);
 
   // ═════════════════ Initial load ═════════════════
 
@@ -268,8 +272,28 @@
 
   // ═════════════════ Query ═════════════════
 
-  async function run() {
-    if (!selectedDb || !isConnected(selectedDb.serverId) || !sql.trim() || runningQuery) return;
+  function buildPayloadFromButton() {
+    // Without cursor info from the editor (button click), pretend we have
+    // cursor at end and no selection.  The editor itself uses the real
+    // selection on Cmd+Enter.
+    return statementAtCursor(sql, sql.length, { from: sql.length, to: sql.length });
+  }
+
+  async function runFromEditor(payload: ReturnType<typeof statementAtCursor> | null) {
+    if (!payload) {
+      editorWarning = "Nothing to run — the buffer is empty.";
+      return;
+    }
+    editorWarning = null;
+
+    if (payload.multiStatement && !payload.isSelection) {
+      editorWarning =
+        "Multiple statements detected — running only the statement at the cursor (multi-statement scripts ship in v1.1).";
+    }
+
+    if (!selectedDb || !isConnected(selectedDb.serverId) || !payload.text.trim() || runningQuery) {
+      return;
+    }
     runningQuery = true;
     result = null;
 
@@ -285,7 +309,7 @@
     }
 
     try {
-      const r = await api.runQuery(selectedDb.serverId, selectedDb.database, sql);
+      const r = await api.runQuery(selectedDb.serverId, selectedDb.database, payload.text);
       currentResultId = r.result_id;
       result = r;
     } catch (err) {
@@ -363,16 +387,22 @@
       {@const sd = selectedDb}
       <h3>{selectedConn.name} / {sd.database}</h3>
 
-      <textarea
-        bind:value={sql}
-        class="sql-input"
-        rows={8}
-        placeholder="SELECT 1"
-      ></textarea>
+      <Editor
+        bind:this={editor}
+        initial={sql}
+        onChange={(doc) => { sql = doc; }}
+        onRun={(payload) => runFromEditor(payload)}
+      />
 
-      <button class="btn" onclick={run} disabled={!canRun}>
-        {runningQuery ? "Running…" : "Run"}
-      </button>
+      {#if editorWarning}
+        <p class="muted">{editorWarning}</p>
+      {/if}
+
+      <div class="run-row">
+        <button class="btn" onclick={() => runFromEditor(buildPayloadFromButton())} disabled={!canRun}>
+          {runningQuery ? "Running…" : "Run (Ctrl/Cmd+Enter)"}
+        </button>
+      </div>
 
       {#if !isConnected(sd.serverId)}
         <p class="muted">Not connected. Right-click the server in the tree → Connect.</p>
@@ -479,7 +509,7 @@
 
   .input { padding: 0.35rem; border: 1px solid #aaa; border-radius: 4px; font: inherit; box-sizing: border-box; }
 
-  .sql-input { width: 100%; padding: 0.5rem; font: 14px monospace; border: 1px solid #aaa; border-radius: 4px; box-sizing: border-box; resize: vertical; }
+  .run-row { display: flex; align-items: center; gap: 0.5rem; }
 
   .result-area { border-top: 1px solid #ccc; padding-top: 0.5rem; }
   .result-area pre { margin: 0; font: 13px monospace; white-space: pre-wrap; }
