@@ -18,13 +18,16 @@
   import { sql, PostgreSQL } from "@codemirror/lang-sql";
   import { searchKeymap } from "@codemirror/search";
   import { bracketMatching, indentOnInput, syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
+  import { autocompletion } from "@codemirror/autocomplete";
 
   import { statementAtCursor } from "./statement";
+  import { makeCompletionSource, type EditorContext } from "./completion";
 
   let {
     initial = "SELECT 1",
     onChange,
     onRun,
+    getContext = () => null as EditorContext,
   }: {
     initial?: string;
     onChange: (doc: string) => void;
@@ -33,6 +36,7 @@
       isSelection: boolean;
       multiStatement: boolean;
     }) => void;
+    getContext?: () => EditorContext;
   } = $props();
 
   let host = $state<HTMLDivElement | null>(null);
@@ -85,6 +89,11 @@
         indentOnInput(),
         syntaxHighlighting(defaultHighlightStyle),
         sql({ dialect: PostgreSQL }),
+        autocompletion({
+          override: [makeCompletionSource(getContext)],
+          closeOnBlur: true,
+          activateOnTyping: true,
+        }),
         keymap.of([
           ...defaultKeymap,
           ...historyKeymap,

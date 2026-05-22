@@ -460,6 +460,7 @@
         initial={sql}
         onChange={(doc) => { sql = doc; }}
         onRun={(payload) => runFromEditor(payload)}
+        getContext={() => selectedDb}
       />
 
       <div class="action-row">
