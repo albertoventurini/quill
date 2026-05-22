@@ -7,7 +7,6 @@
     type RunResult,
     type ChunkResult,
     type CommandError,
-    type ColumnMeta,
   } from "$lib/tauri";
   import ResultGrid from "$lib/ResultGrid.svelte";
   import Editor from "$lib/Editor.svelte";
@@ -16,6 +15,8 @@
   import type { ServerNode, TreeNode, DatabaseNode } from "$lib/tree";
   import { clearDatabaseSubtree, errorMessage } from "$lib/tree";
   import { clearServerSchemaPayloads } from "$lib/schemaStore";
+  import Tabs from "$lib/Tabs.svelte";
+  import { makeTab, type Tab } from "$lib/tabs";
 
   // ═════════════════ State ═════════════════
 
@@ -46,22 +47,22 @@
     target: TreeNode;
   } | null>(null);
 
-  // SQL form (kept from M1.6).
-  let sql = $state("SELECT 1");
-  let runningQuery = $state(false);
-  type ActiveResult = {
-    resultId: string;
-    columns: ColumnMeta[];
-    rows: unknown[][];
-    hasMore: boolean;
-    rowCount: number;
-    durationMs: number;
-  };
-  let active = $state<ActiveResult | null>(null);
-  let lastError = $state<CommandError | null>(null);
-  let loadingMore = $state(false);
+  // Tab state (M5.3).
+  let tabs = $state<Tab[]>([]);
+  let activeTabId = $state<number | null>(null);
+
+  let activeTab = $derived(
+    activeTabId === null ? null : tabs.find((t) => t.id === activeTabId) ?? null,
+  );
+
   let editor = $state<Editor | undefined>(undefined);
-  let editorWarning = $state<string | null>(null);
+
+  // Change-database dialog state
+  let dbDialog = $state<HTMLDialogElement | null>(null);
+  let dbDialogTabId = $state<number | null>(null);
+  let dbDialogPick = $state<string>("");
+  let dbDialogOptions = $state<string[]>([]);
+  let dbDialogError = $state<string>("");
 
   // ═════════════════ Initial load ═════════════════
 
@@ -153,9 +154,18 @@
   }
 
   async function disconnect(id: number) {
-    if (active && selectedDb?.serverId === id) {
-      active = null;
+    // Close any tabs targeting this server, freeing their results first.
+    const targets = tabs.filter((t) => t.serverId === id);
+    for (const t of targets) {
+      if (t.active?.resultId) {
+        try { await api.closeResult(t.active.resultId); } catch {}
+      }
     }
+    tabs = tabs.filter((t) => t.serverId !== id);
+    if (activeTabId !== null && !tabs.some((t) => t.id === activeTabId)) {
+      activeTabId = tabs.length ? tabs[tabs.length - 1].id : null;
+    }
+
     await api.disconnectServer(id);
     clearServerSchemaPayloads(id);
     delete connectedState[id];
@@ -208,14 +218,11 @@
   // ═════════════════ Selection ═════════════════
 
   async function selectDb(serverId: number, database: string) {
-    if (
-      active &&
-      selectedDb &&
-      (selectedDb.serverId !== serverId || selectedDb.database !== database)
-    ) {
-      await closeActive();
-    }
     selectedDb = { serverId, database };
+    // If there are no tabs yet, open the first one targeting this DB.
+    if (tabs.length === 0) {
+      addTab();
+    }
   }
 
   let selectedConn = $derived(
@@ -293,42 +300,133 @@
     return items;
   }
 
+  // ═════════════════ Tab lifecycle ═════════════════
+
+  function addTab() {
+    if (!selectedDb) return;
+    const tab = makeTab(selectedDb.serverId, selectedDb.database, "");
+    tabs.push(tab);
+    activeTabId = tab.id;
+  }
+
+  async function closeTab(id: number) {
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab) return;
+
+    // Stop in-flight work so the backend doesn't leak a slot.
+    if (tab.runningQuery) {
+      try {
+        await api.cancelQuery(tab.serverId, tab.database);
+      } catch { /* best-effort */ }
+    }
+    if (tab.active?.resultId) {
+      try {
+        await api.closeResult(tab.active.resultId);
+      } catch { /* best-effort */ }
+    }
+
+    tabs = tabs.filter((t) => t.id !== id);
+
+    // Refocus: prefer the tab to the right; fall back to the one to the left.
+    if (activeTabId === id) {
+      const remaining = tabs;
+      activeTabId = remaining.length ? remaining[Math.max(0, remaining.length - 1)].id : null;
+    }
+
+    // Slot may have freed.
+    await refreshSlotState(tab.serverId);
+  }
+
+  function selectTab(id: number) {
+    activeTabId = id;
+  }
+
+  async function openChangeDbDialog(tabId: number) {
+    const tab = tabs.find((t) => t.id === tabId);
+    if (!tab) return;
+    if (!isConnected(tab.serverId)) {
+      // Can't list DBs without an active connection.
+      tab.lastError = {
+        kind: "NotConnected",
+        message: "Connect to the server first to change databases.",
+      };
+      return;
+    }
+    dbDialogTabId = tabId;
+    dbDialogError = "";
+    dbDialogPick = tab.database;
+    try {
+      const dbs = await api.listDatabases(tab.serverId);
+      dbDialogOptions = dbs.map((d) => d.name);
+    } catch (err) {
+      dbDialogOptions = [];
+      dbDialogError = errorMessage(err);
+    }
+    dbDialog?.showModal();
+  }
+
+  async function submitChangeDb(e: Event) {
+    e.preventDefault();
+    if (dbDialogTabId === null) return;
+    const tab = tabs.find((t) => t.id === dbDialogTabId);
+    if (!tab) return;
+
+    // Close any active result on the old DB first — same hygiene rule as
+    // M3.6's "switching DBs closes the prior result," but applied at the
+    // tab level.
+    if (tab.active?.resultId) {
+      try { await api.closeResult(tab.active.resultId); } catch {}
+      tab.active = null;
+    }
+
+    tab.database = dbDialogPick;
+    // Database changed → previous SQL may not parse against the new schema,
+    // but the buffer is the user's; don't clear it.
+    dbDialog?.close();
+    await refreshSlotState(tab.serverId);
+  }
+
   // ═════════════════ Query ═════════════════
 
-  function buildPayloadFromButton() {
-    // Without cursor info from the editor (button click), pretend we have
-    // cursor at end and no selection.  The editor itself uses the real
-    // selection on Cmd+Enter.
-    return statementAtCursor(sql, sql.length, { from: sql.length, to: sql.length });
+  function buildPayloadFromButton(tab: Tab) {
+    // Without cursor info from the editor (button click), pretend cursor at end.
+    return statementAtCursor(tab.sql, tab.sql.length, {
+      from: tab.sql.length,
+      to: tab.sql.length,
+    });
+  }
+
+  function canRun(tab: Tab): boolean {
+    return isConnected(tab.serverId) && tab.sql.trim().length > 0 && !tab.runningQuery;
   }
 
   async function runFromEditor(payload: ReturnType<typeof statementAtCursor> | null) {
+    const tab = activeTab;
+    if (!tab) return;
+
     if (!payload) {
-      editorWarning = "Nothing to run — the buffer is empty.";
+      tab.editorWarning = "Nothing to run — the buffer is empty.";
       return;
     }
-    editorWarning = null;
+    tab.editorWarning = null;
 
     if (payload.multiStatement && !payload.isSelection) {
-      editorWarning =
+      tab.editorWarning =
         "Multiple statements detected — running only the statement at the cursor (multi-statement scripts ship in v1.1).";
     }
 
-    if (!selectedDb || !isConnected(selectedDb.serverId) || !payload.text.trim() || runningQuery) {
+    if (!isConnected(tab.serverId) || !payload.text.trim() || tab.runningQuery) {
       return;
     }
 
-    await closeActive();
+    // Close any prior result on this tab.
+    await closeActive(tab);
 
-    runningQuery = true;
-    lastError = null;
+    tab.runningQuery = true;
+    tab.lastError = null;
     try {
-      const r: RunResult = await api.runQuery(
-        selectedDb.serverId,
-        selectedDb.database,
-        payload.text,
-      );
-      active = {
+      const r: RunResult = await api.runQuery(tab.serverId, tab.database, payload.text);
+      tab.active = {
         resultId: r.result_id,
         columns: r.columns,
         rows: r.first_chunk,
@@ -337,57 +435,53 @@
         durationMs: r.duration_ms_so_far,
       };
     } catch (err) {
-      lastError = err as CommandError;
+      tab.lastError = err as CommandError;
     } finally {
-      runningQuery = false;
+      tab.runningQuery = false;
     }
-    if (selectedDb) await refreshSlotState(selectedDb.serverId);
+    await refreshSlotState(tab.serverId);
   }
 
   async function loadMore() {
-    if (!active || loadingMore) return;
-    loadingMore = true;
+    const tab = activeTab;
+    if (!tab || !tab.active || tab.loadingMore) return;
+    tab.loadingMore = true;
     try {
-      const chunk: ChunkResult = await api.fetchMore(active.resultId);
-      active.rows = [...active.rows, ...chunk.rows];
-      active.hasMore = chunk.has_more;
-      active.rowCount = chunk.row_count_so_far;
-      active.durationMs = chunk.duration_ms_so_far;
-      if (!chunk.has_more) {
-        active.resultId = "";
-      }
+      const chunk: ChunkResult = await api.fetchMore(tab.active.resultId);
+      tab.active.rows = [...tab.active.rows, ...chunk.rows];
+      tab.active.hasMore = chunk.has_more;
+      tab.active.rowCount = chunk.row_count_so_far;
+      tab.active.durationMs = chunk.duration_ms_so_far;
+      if (!chunk.has_more) tab.active.resultId = "";
     } catch (err) {
-      lastError = err as CommandError;
-      active = null;
+      tab.lastError = err as CommandError;
+      tab.active = null;
     } finally {
-      loadingMore = false;
+      tab.loadingMore = false;
     }
-    if (selectedDb) await refreshSlotState(selectedDb.serverId);
+    await refreshSlotState(tab.serverId);
   }
 
-  async function closeActive() {
-    if (!active) return;
-    const rid = active.resultId;
-    active = null;
-    lastError = null;
+  async function closeActive(tab: Tab | null = activeTab) {
+    if (!tab || !tab.active) return;
+    const rid = tab.active.resultId;
+    tab.active = null;
+    tab.lastError = null;
     if (rid) {
-      try {
-        await api.closeResult(rid);
-      } catch {
-        // Best-effort; ignore.
-      }
+      try { await api.closeResult(rid); } catch {}
     }
-    if (selectedDb) await refreshSlotState(selectedDb.serverId);
+    await refreshSlotState(tab.serverId);
   }
 
   async function cancelRunning() {
-    if (!selectedDb) return;
+    const tab = activeTab;
+    if (!tab) return;
     try {
-      await api.cancelQuery(selectedDb.serverId, selectedDb.database);
+      await api.cancelQuery(tab.serverId, tab.database);
     } catch (err) {
-      lastError = err as CommandError;
+      tab.lastError = err as CommandError;
     }
-    if (selectedDb) await refreshSlotState(selectedDb.serverId);
+    await refreshSlotState(tab.serverId);
   }
 
   async function refreshSlotState(serverId: number) {
@@ -395,26 +489,21 @@
     if (s) connectedState[serverId] = s;
   }
 
-  function statusLineText(a: ActiveResult): string {
-    const slot = connectedState[selectedDb!.serverId];
+  function statusLineText(tab: Tab): string {
+    const a = tab.active!;
+    const slot = connectedState[tab.serverId];
     const busy = slot ? slot.slots.filter((s) => s.busy).length : 0;
     const budget = slot ? slot.budget : 0;
+    const serverName = connections.find((c) => c.id === tab.serverId)?.name ?? "?";
     const parts = [
       `${a.rowCount.toLocaleString()} rows`,
       `${a.durationMs}ms`,
       `slot [${busy}/${budget}]`,
-      `${selectedConn?.name ?? "?"}@${selectedDb!.database}`,
+      `${serverName}@${tab.database}`,
       a.hasMore ? "cursor open" : "cursor closed",
     ];
     return parts.join(" · ");
   }
-
-  let canRun = $derived(
-    selectedDb !== null &&
-      isConnected(selectedDb.serverId) &&
-      sql.trim().length > 0 &&
-      !runningQuery,
-  );
 </script>
 
 <svelte:window onclick={closeMenu} oncontextmenu={(e) => { if (!menu) return; e.preventDefault(); closeMenu(); }} />
@@ -451,63 +540,71 @@
 
   <!-- ═══════ RIGHT PANE ═══════ -->
   <main class="right-pane">
-    {#if selectedConn && selectedDb}
-      {@const sd = selectedDb}
-      <h3>{selectedConn.name} / {sd.database}</h3>
+    <Tabs
+      {tabs}
+      activeId={activeTabId}
+      treeServerId={selectedDb?.serverId ?? null}
+      treeDatabase={selectedDb?.database ?? null}
+      serverNameLookup={(id) => connections.find((c) => c.id === id)?.name ?? "?"}
+      onSelect={selectTab}
+      onClose={closeTab}
+      onAdd={addTab}
+      onChangeDatabase={openChangeDbDialog}
+    />
 
-      <Editor
-        bind:this={editor}
-        initial={sql}
-        onChange={(doc) => { sql = doc; }}
-        onRun={(payload) => runFromEditor(payload)}
-        getContext={() => selectedDb}
-      />
+    {#if activeTab}
+      {@const tab = activeTab}
+      {#key tab.id}
+        <Editor
+          bind:this={editor}
+          initial={tab.sql}
+          onChange={(doc) => { tab.sql = doc; }}
+          onRun={(payload) => runFromEditor(payload)}
+          getContext={() => ({ serverId: tab.serverId, database: tab.database })}
+        />
+      {/key}
 
       <div class="action-row">
-        <button class="btn" onclick={() => runFromEditor(buildPayloadFromButton())} disabled={!canRun}>
-          {runningQuery ? "Running…" : "Run (Ctrl/Cmd+Enter)"}
+        <button class="btn" onclick={() => runFromEditor(buildPayloadFromButton(tab))} disabled={!canRun(tab)}>
+          {tab.runningQuery ? "Running…" : "Run (Ctrl/Cmd+Enter)"}
         </button>
-
-        <button
-          class="btn"
-          onclick={cancelRunning}
-          disabled={!runningQuery && !active}
-        >Cancel</button>
-
-        {#if active}
-          <button class="btn" onclick={closeActive}>Close result</button>
+        <button class="btn" onclick={cancelRunning} disabled={!tab.runningQuery && !tab.active}>
+          Cancel
+        </button>
+        {#if tab.active}
+          <button class="btn" onclick={() => closeActive(tab)}>Close result</button>
         {/if}
       </div>
 
-      {#if editorWarning}
-        <p class="muted inline">{editorWarning}</p>
+      {#if tab.editorWarning}
+        <p class="muted inline">{tab.editorWarning}</p>
       {/if}
-      {#if lastError}
+      {#if tab.lastError}
         <p class="inline error">
-          <span class="err-badge">{lastError.kind}</span>
-          {lastError.message}
+          <span class="err-badge">{tab.lastError.kind}</span>
+          {tab.lastError.message}
         </p>
       {/if}
 
-      {#if active}
+      {#if tab.active}
         <ResultGrid
-          columns={active.columns}
-          rows={active.rows}
-          statusLine={statusLineText(active)}
-          hasMore={active.hasMore}
-          loadingMore={loadingMore}
+          columns={tab.active.columns}
+          rows={tab.active.rows}
+          statusLine={statusLineText(tab)}
+          hasMore={tab.active.hasMore}
+          loadingMore={tab.loadingMore}
           onLoadMore={loadMore}
-          canLoadMore={!!active.resultId}
+          canLoadMore={!!tab.active.resultId}
         />
-      {:else if !runningQuery && !lastError}
+      {:else if !tab.runningQuery && !tab.lastError}
         <p class="muted">No active result. Press Run or Ctrl/Cmd+Enter.</p>
       {/if}
 
-      {#if !isConnected(sd.serverId)}
+      {#if !isConnected(tab.serverId)}
         <p class="muted">Not connected. Right-click the server in the tree → Connect.</p>
       {/if}
     {:else}
-      <p class="muted">Select a database in the tree (left) to start querying.</p>
+      <p class="muted">Select a database in the tree (left), or click + to open a tab.</p>
     {/if}
   </main>
 </div>
@@ -573,6 +670,32 @@
     <div class="modal-actions">
       <button type="button" class="btn" onclick={() => pwDialog?.close()}>Cancel</button>
       <button type="submit" class="btn btn-primary">Connect</button>
+    </div>
+  </form>
+</dialog>
+
+<!-- ═══════ CHANGE-DATABASE DIALOG ═══════ -->
+<dialog bind:this={dbDialog} class="modal">
+  <h2>Change database</h2>
+  <form onsubmit={submitChangeDb} class="add-form">
+    {#if dbDialogError}
+      <p class="error">{dbDialogError}</p>
+    {:else}
+      <label class="field">
+        Database
+        <select class="input" bind:value={dbDialogPick}>
+          {#each dbDialogOptions as db}
+            <option value={db}>{db}</option>
+          {/each}
+        </select>
+      </label>
+      <p class="muted" style="font-size: 0.85rem;">
+        Closes the tab's current result, if any.
+      </p>
+    {/if}
+    <div class="modal-actions">
+      <button type="button" class="btn" onclick={() => dbDialog?.close()}>Cancel</button>
+      <button type="submit" class="btn btn-primary" disabled={!!dbDialogError}>Change</button>
     </div>
   </form>
 </dialog>
