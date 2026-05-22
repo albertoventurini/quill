@@ -17,7 +17,7 @@
   } from "@codemirror/commands";
   import { sql, PostgreSQL } from "@codemirror/lang-sql";
   import { searchKeymap } from "@codemirror/search";
-  import { bracketMatching, indentOnInput } from "@codemirror/language";
+  import { bracketMatching, indentOnInput, syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
 
   import { statementAtCursor } from "./statement";
 
@@ -83,6 +83,7 @@
         history(),
         bracketMatching(),
         indentOnInput(),
+        syntaxHighlighting(defaultHighlightStyle),
         sql({ dialect: PostgreSQL }),
         keymap.of([
           ...defaultKeymap,
