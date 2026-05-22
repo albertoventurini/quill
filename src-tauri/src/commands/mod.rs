@@ -5,8 +5,6 @@
 //! opens a Postgres connection eagerly — connections happen only inside
 //! `run_query` (AGENTS.md principle 1).
 
-use std::time::Instant;
-
 use secrecy::SecretString;
 use serde::Serialize;
 use serde_json::Value;
@@ -15,9 +13,11 @@ use tokio_postgres::Row;
 use tokio_postgres::types::Type;
 
 use crate::pg::PgConnector;
+use crate::query::{self, ChunkResult, DEFAULT_CHUNK_SIZE, ResultRegistry, RunResult};
 use crate::registry::{ServerHandle, ServerRegistry};
 use crate::slots::{SlotError, SlotState};
 use crate::store;
+use uuid::Uuid;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Command error type  (serialized as { kind, message })
@@ -86,18 +86,8 @@ impl From<crate::introspect::IntrospectError> for CommandError {
 // Query result types
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// Returned by `run_query`.  The frontend renders `rows` as a table using
-/// the `columns` metadata.
-#[derive(Debug, Serialize)]
-pub struct QueryResult {
-    pub columns: Vec<ColumnMeta>,
-    pub rows: Vec<Vec<Value>>,
-    pub row_count: usize,
-    pub duration_ms: u64,
-}
-
 /// Metadata for one result-set column.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Clone)]
 pub struct ColumnMeta {
     pub name: String,
     pub type_name: String,
@@ -292,9 +282,11 @@ pub async fn connect_server(
 pub async fn disconnect_server(
     id: i64,
     registry: State<'_, ServerRegistry>,
+    results: State<'_, ResultRegistry>,
 ) -> Result<(), CommandError> {
-    // Remove and take the handle out of the map so disconnect_all runs
-    // outside the DashMap shard lock.
+    // Close all open results on this server before tearing down slots.
+    query::sweep_for_server(id, &results).await;
+
     let handle = registry
         .by_id
         .remove(&id)
@@ -305,79 +297,67 @@ pub async fn disconnect_server(
     Ok(())
 }
 
-/// Run a SQL query against a connected server.
-///
-/// 1. Look up the `ServerHandle` in the registry; return `NotConnected` if absent.
-/// 2. Acquire a slot bound to `database` via `slot_manager.acquire()` — this
-///    is the **only** place where a Postgres connection may be opened.
-/// 3. Execute the SQL; time it.
-/// 4. Convert rows to JSON; return a `QueryResult`.
+/// Run a SQL query against a connected server.  Opens a server-side cursor
+/// and returns the first chunk (default 1000 rows).  Subsequent chunks are
+/// fetched via [`fetch_more`]; the cursor is closed with [`close_result`].
 #[tauri::command]
 pub async fn run_query(
     server_id: i64,
     database: String,
     sql: String,
+    chunk_size: Option<usize>,
     registry: State<'_, ServerRegistry>,
-) -> Result<QueryResult, CommandError> {
+    results: State<'_, ResultRegistry>,
+) -> Result<RunResult, CommandError> {
     let handle = registry
         .by_id
         .get(&server_id)
         .ok_or_else(|| CommandError::not_connected(server_id))?;
-
-    // Clone the Arc out of the map so we don't hold a DashMap shard lock
-    // across the `.await`.
     let slot_manager = handle.slot_manager.clone();
     drop(handle);
 
-    let guard = slot_manager
-        .acquire(&database)
+    let chunk = chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
+    query::run_query(server_id, &database, &sql, chunk, slot_manager, &results)
         .await
-        .map_err(|e: SlotError| CommandError::Slot(e.to_string()))?;
+        .map_err(map_query_err)
+}
 
-    // Reject bare SELECT — Postgres treats it as a single empty row,
-    // but the user meant to type a real query.
-    {
-        let bare = sql.trim().trim_matches(';').trim();
-        if bare.eq_ignore_ascii_case("SELECT") {
-            return Err(CommandError::Pg(
-                "incomplete query: SELECT requires a column list".into(),
-            ));
+#[tauri::command]
+pub async fn fetch_more(
+    result_id: String,
+    chunk_size: Option<usize>,
+    results: State<'_, ResultRegistry>,
+) -> Result<ChunkResult, CommandError> {
+    let id = Uuid::parse_str(&result_id)
+        .map_err(|e| CommandError::Pg(format!("invalid result_id: {e}")))?;
+    let chunk = chunk_size.unwrap_or(DEFAULT_CHUNK_SIZE);
+    query::fetch_more(id, chunk, &results)
+        .await
+        .map_err(map_query_err)
+}
+
+#[tauri::command]
+pub async fn close_result(
+    result_id: String,
+    results: State<'_, ResultRegistry>,
+) -> Result<(), CommandError> {
+    let id = Uuid::parse_str(&result_id)
+        .map_err(|e| CommandError::Pg(format!("invalid result_id: {e}")))?;
+    query::close_result(id, &results)
+        .await
+        .map_err(map_query_err)
+}
+
+fn map_query_err(e: query::QueryError) -> CommandError {
+    match e {
+        query::QueryError::BareSelect => {
+            CommandError::Pg("incomplete query: SELECT requires a column list".into())
         }
+        query::QueryError::UnknownResult => {
+            CommandError::Pg("result_id is not open (was it already closed?)".into())
+        }
+        query::QueryError::Pg(m) | query::QueryError::Slot(m) => CommandError::Pg(m),
     }
-
-    let start = Instant::now();
-    let rows: Vec<Row> = guard
-        .query(&sql, &[])
-        .await
-        .map_err(|e| CommandError::Pg(e.to_string()))?;
-    let duration_ms = start.elapsed().as_millis() as u64;
-
-    let columns: Vec<ColumnMeta> = rows
-        .first()
-        .map(|r| {
-            r.columns()
-                .iter()
-                .map(|col| ColumnMeta {
-                    name: col.name().to_string(),
-                    // Emit uppercase type names ("INT4", "TEXT") for
-                    // backwards compatibility with the frontend.
-                    type_name: col.type_().name().to_uppercase(),
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let row_count = rows.len();
-    let json_rows: Vec<Vec<Value>> = rows.iter().map(pg_row_to_json).collect();
-
-    // guard dropped here — slot returns to idle.
-
-    Ok(QueryResult {
-        columns,
-        rows: json_rows,
-        row_count,
-        duration_ms,
-    })
 }
 
 /// Return the current slot state for a connected server.
@@ -622,30 +602,4 @@ pub async fn cancel_query(
 // Unit tests
 // ═══════════════════════════════════════════════════════════════════════════
 
-#[cfg(test)]
-mod tests {
-    /// Test the bare-SELECT detection used by `run_query`.
-    fn is_bare_select(sql: &str) -> bool {
-        let bare = sql.trim().trim_matches(';').trim();
-        bare.eq_ignore_ascii_case("SELECT")
-    }
-
-    #[test]
-    fn rejects_bare_select_variants() {
-        assert!(is_bare_select("SELECT"));
-        assert!(is_bare_select("SELECT "));
-        assert!(is_bare_select("  SELECT  "));
-        assert!(is_bare_select("select"));
-        assert!(is_bare_select("SELECT;"));
-        assert!(is_bare_select("SELECT ;;;"));
-    }
-
-    #[test]
-    fn allows_real_select_queries() {
-        assert!(!is_bare_select("SELECT 1"));
-        assert!(!is_bare_select("SELECT * FROM foo"));
-        assert!(!is_bare_select(" SELECT pg_sleep(1) "));
-        assert!(!is_bare_select(""));
-        assert!(!is_bare_select("INSERT INTO t VALUES (1)"));
-    }
-}
+// (bare-SELECT tests moved to query/mod.rs)

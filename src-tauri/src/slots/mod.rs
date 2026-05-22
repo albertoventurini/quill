@@ -16,6 +16,7 @@
 //! - No keepalives, no background tasks, no pre-fetching (AGENTS.md principle 1).
 
 use std::ops::Deref;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, SystemTime};
@@ -227,6 +228,70 @@ impl<C: Connector> Drop for SlotGuard<'_, C> {
             });
         } else {
             // Normal path — return the connection to the pool.
+            slot.conn = Some(conn);
+            slot.last_used = Instant::now();
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// OwnedSlotGuard  (RAII, lifetime-free)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Like [`SlotGuard`], but owns an `Arc<SlotManager<C>>` instead of
+/// borrowing.  Required for guards that live inside long-lived
+/// structures (e.g. M3.4's `query::OpenResult`).
+///
+/// Returning the connection on drop works the same way as `SlotGuard`.
+pub struct OwnedSlotGuard<C: Connector> {
+    manager: Arc<SlotManager<C>>,
+    slot_idx: usize,
+    conn: Option<C::Conn>,
+}
+
+impl<C: Connector> std::ops::Deref for OwnedSlotGuard<C> {
+    type Target = C::Conn;
+    fn deref(&self) -> &C::Conn {
+        self.conn
+            .as_ref()
+            .expect("OwnedSlotGuard always holds a connection")
+    }
+}
+
+impl<C: Connector> std::ops::DerefMut for OwnedSlotGuard<C> {
+    fn deref_mut(&mut self) -> &mut C::Conn {
+        self.conn
+            .as_mut()
+            .expect("OwnedSlotGuard always holds a connection")
+    }
+}
+
+impl<C: Connector> Drop for OwnedSlotGuard<C> {
+    fn drop(&mut self) {
+        let conn = self
+            .conn
+            .take()
+            .expect("OwnedSlotGuard always holds a connection");
+
+        let mut slots = match self.manager.slots.lock() {
+            Ok(g) => g,
+            Err(poisoned) => {
+                drop(poisoned.into_inner());
+                return;
+            }
+        };
+
+        let slot = &mut slots[self.slot_idx];
+        slot.busy = false;
+
+        if slot.disconnect_pending {
+            slot.conn = None;
+            slot.database = None;
+            slot.cancel = None;
+            slot.disconnect_pending = false;
+            drop(slots);
+            tokio::spawn(async move { C::close(conn).await });
+        } else {
             slot.conn = Some(conn);
             slot.last_used = Instant::now();
         }
@@ -449,6 +514,55 @@ impl<C: Connector> SlotManager<C> {
             })
             .filter_map(|s| s.cancel.clone())
             .collect()
+    }
+
+    /// Acquire a slot bound to `database` and return an owning guard that
+    /// can outlive this call frame.
+    ///
+    /// Same rules as [`acquire`](Self::acquire); the only difference is
+    /// the returned type.
+    pub async fn acquire_owned(
+        self: Arc<Self>,
+        database: &str,
+    ) -> Result<OwnedSlotGuard<C>, SlotError> {
+        let db = database.to_string();
+
+        let decision = {
+            let mut slots = self.slots.lock().unwrap();
+            let budget = self.budget.load(Ordering::Relaxed);
+            while slots.len() < budget {
+                slots.push(Slot::free());
+            }
+            apply_rules(&mut slots, &db, budget)?
+        };
+
+        let (idx, conn) = match decision {
+            SlotDecision::Reuse { idx, conn } => (idx, conn),
+            SlotDecision::NeedsConnect { idx, evict_conn } => {
+                if let Some(old) = evict_conn {
+                    C::close(old).await;
+                }
+
+                let recovery = Recovery {
+                    slots: &self.slots,
+                    idx,
+                    recovered: std::cell::Cell::new(false),
+                };
+                let (new_conn, new_cancel) = self.connector.connect(&db).await?;
+                {
+                    let mut slots = self.slots.lock().unwrap();
+                    slots[idx].cancel = Some(new_cancel);
+                }
+                recovery.recovered.set(true);
+                (idx, new_conn)
+            }
+        };
+
+        Ok(OwnedSlotGuard {
+            manager: self,
+            slot_idx: idx,
+            conn: Some(conn),
+        })
     }
 }
 
@@ -952,5 +1066,36 @@ mod tests {
         let handles = mgr.busy_cancel_handles(None);
         drop(g);
         assert_eq!(handles.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn owned_guard_returns_conn_to_pool() {
+        let (conn, connects, _closes) = FakeConnector::new();
+        let mgr = Arc::new(SlotManager::new(conn, 1));
+
+        let g = mgr.clone().acquire_owned("A").await.unwrap();
+        drop(g);
+
+        let g = mgr.clone().acquire_owned("A").await.unwrap();
+        drop(g);
+
+        assert_eq!(
+            connects.load(Ordering::SeqCst),
+            1,
+            "second acquire should reuse the existing connection"
+        );
+    }
+
+    #[tokio::test]
+    async fn owned_guard_concurrent_two_slots() {
+        let (conn, connects, _closes) = FakeConnector::new();
+        let mgr = Arc::new(SlotManager::new(conn, 2));
+
+        let g1 = mgr.clone().acquire_owned("A").await.unwrap();
+        let g2 = mgr.clone().acquire_owned("A").await.unwrap();
+
+        assert_eq!(connects.load(Ordering::SeqCst), 2);
+        drop(g1);
+        drop(g2);
     }
 }

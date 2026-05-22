@@ -42,15 +42,22 @@ export type SlotState = {
   slots: SlotInfo[];
 };
 
-// ── Query result types (mirrors commands::QueryResult / ColumnMeta) ──
+// ── Query results (mirrors query::RunResult / ChunkResult) ──
 
-/** `rows` holds `serde_json::Value` cells — null, bool, number, string,
- *  array, or object. */
-export type QueryResult = {
+export type RunResult = {
+  result_id: string;
   columns: ColumnMeta[];
+  first_chunk: unknown[][];
+  has_more: boolean;
+  row_count_so_far: number;
+  duration_ms_so_far: number;
+};
+
+export type ChunkResult = {
   rows: unknown[][];
-  row_count: number;
-  duration_ms: number;
+  has_more: boolean;
+  row_count_so_far: number;
+  duration_ms_so_far: number;
 };
 
 export type ColumnMeta = {
@@ -128,8 +135,19 @@ export const api = {
   disconnectServer: (id: number) =>
     invoke<void>("disconnect_server", { id }),
 
-  runQuery: (serverId: number, database: string, sql: string) =>
-    invoke<QueryResult>("run_query", { serverId, database, sql }),
+  runQuery: (
+    serverId: number,
+    database: string,
+    sql: string,
+    chunkSize: number | null = null,
+  ) =>
+    invoke<RunResult>("run_query", { serverId, database, sql, chunkSize }),
+
+  fetchMore: (resultId: string, chunkSize: number | null = null) =>
+    invoke<ChunkResult>("fetch_more", { resultId, chunkSize }),
+
+  closeResult: (resultId: string) =>
+    invoke<void>("close_result", { resultId }),
 
   getSlotState: (serverId: number) =>
     invoke<SlotState | null>("get_slot_state", { serverId }),

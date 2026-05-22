@@ -1,6 +1,7 @@
 pub mod commands;
 pub mod introspect;
 pub mod pg;
+pub mod query;
 pub mod registry;
 pub mod slots;
 pub mod store;
@@ -16,6 +17,7 @@ pub fn run() {
             let pool = tauri::async_runtime::block_on(store::open(handle))?;
             app.manage(pool);
             app.manage(registry::ServerRegistry::default());
+            app.manage(query::ResultRegistry::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -32,6 +34,8 @@ pub fn run() {
             commands::list_functions,
             commands::refresh_schema_cache,
             commands::cancel_query, // M3.3
+            commands::fetch_more,
+            commands::close_result,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

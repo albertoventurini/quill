@@ -4,7 +4,7 @@
     type Connection,
     type NewConnection,
     type SlotState,
-    type QueryResult,
+    type RunResult,
     type CommandError,
   } from "$lib/tauri";
   import Tree from "$lib/Tree.svelte";
@@ -43,7 +43,8 @@
   // SQL form (kept from M1.6).
   let sql = $state("SELECT 1");
   let runningQuery = $state(false);
-  let result = $state<QueryResult | { error: CommandError } | null>(null);
+  let result = $state<RunResult | { error: CommandError } | null>(null);
+  let currentResultId = $state<string | null>(null);
 
   // ═════════════════ Initial load ═════════════════
 
@@ -271,8 +272,22 @@
     if (!selectedDb || !isConnected(selectedDb.serverId) || !sql.trim() || runningQuery) return;
     runningQuery = true;
     result = null;
+
+    // Close the previous cursor before opening a new one,
+    // so we don't exhaust the slot budget.
+    if (currentResultId) {
+      try {
+        await api.closeResult(currentResultId);
+      } catch {
+        // cursor may already be closed — ignore
+      }
+      currentResultId = null;
+    }
+
     try {
-      result = await api.runQuery(selectedDb.serverId, selectedDb.database, sql);
+      const r = await api.runQuery(selectedDb.serverId, selectedDb.database, sql);
+      currentResultId = r.result_id;
+      result = r;
     } catch (err) {
       result = { error: err as CommandError };
     } finally {
@@ -287,11 +302,11 @@
       !runningQuery,
   );
 
-  function renderResult(r: QueryResult): string {
+  function renderResult(r: RunResult): string {
     if (r.columns.length === 0)
-      return `(no columns)\n${r.row_count} rows, ${r.duration_ms}ms`;
+      return `(no columns)\n${r.row_count_so_far} rows, ${r.duration_ms_so_far}ms`;
     const header = r.columns.map((c) => c.name).join("\t");
-    const lines = r.rows.map((row) =>
+    const lines = r.first_chunk.map((row) =>
       row
         .map((cell) => {
           if (cell === null) return "NULL";
@@ -300,7 +315,13 @@
         })
         .join("\t"),
     );
-    return [header, ...lines, "", `${r.row_count} rows in ${r.duration_ms}ms`].join("\n");
+    return [
+      header,
+      ...lines,
+      "",
+      `${r.row_count_so_far} rows so far in ${r.duration_ms_so_far}ms`
+        + (r.has_more ? " (more available — Load-more UI in M3.6)" : ""),
+    ].join("\n");
   }
 </script>
 
