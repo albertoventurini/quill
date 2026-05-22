@@ -15,8 +15,10 @@
   import type { ServerNode, TreeNode, DatabaseNode } from "$lib/tree";
   import { clearDatabaseSubtree, errorMessage } from "$lib/tree";
   import { clearServerSchemaPayloads } from "$lib/schemaStore";
-  import Tabs from "$lib/Tabs.svelte";
-  import { makeTab, type Tab } from "$lib/tabs";
+import Tabs from "$lib/Tabs.svelte";
+import { makeTab, type Tab } from "$lib/tabs";
+import SidePanel from "$lib/SidePanel.svelte";
+import SaveDialog from "$lib/SaveDialog.svelte";
 
   // ═════════════════ State ═════════════════
 
@@ -63,6 +65,11 @@
   let dbDialogPick = $state<string>("");
   let dbDialogOptions = $state<string[]>([]);
   let dbDialogError = $state<string>("");
+
+  // Side panel + save state
+  let sidePanelError = $state<string | null>(null);
+  let saveDialog = $state<SaveDialog | undefined>(undefined);
+  let savedListRefreshKey = $state(0);
 
   // ═════════════════ Initial load ═════════════════
 
@@ -309,6 +316,25 @@
     activeTabId = tab.id;
   }
 
+  function defaultDbForServer(serverId: number): string {
+    return connections.find((c) => c.id === serverId)?.default_db ?? "postgres";
+  }
+
+  function openInNewTab(serverId: number, database: string, sql: string) {
+    if (!connections.some((c) => c.id === serverId)) {
+      sidePanelError = "This connection has been deleted.";
+      return;
+    }
+    const tab = makeTab(serverId, database, sql);
+    tabs.push(tab);
+    activeTabId = tab.id;
+  }
+
+  function openSaveDialog() {
+    if (!activeTab) return;
+    saveDialog?.open();
+  }
+
   async function closeTab(id: number) {
     const tab = tabs.find((t) => t.id === id);
     if (!tab) return;
@@ -536,6 +562,20 @@
         {/each}
       </div>
     {/if}
+
+    <SidePanel
+      selectedServerId={selectedDb?.serverId ?? null}
+      resolveDb={defaultDbForServer}
+      onOpenInNewTab={openInNewTab}
+      onError={(msg) => (sidePanelError = msg)}
+    />
+    {#if sidePanelError}
+      <p class="inline error" style="padding: 0.25rem 0.5rem;">
+        <span class="err-badge">side panel</span>
+        {sidePanelError}
+        <button class="btn" style="margin-left: 0.4rem; padding: 0 0.4rem;" onclick={() => (sidePanelError = null)}>×</button>
+      </p>
+    {/if}
   </aside>
 
   <!-- ═══════ RIGHT PANE ═══════ -->
@@ -574,6 +614,7 @@
         {#if tab.active}
           <button class="btn" onclick={() => closeActive(tab)}>Close result</button>
         {/if}
+        <button class="btn" onclick={openSaveDialog} disabled={!tab.sql.trim()}>Save…</button>
       </div>
 
       {#if tab.editorWarning}
@@ -603,6 +644,14 @@
       {#if !isConnected(tab.serverId)}
         <p class="muted">Not connected. Right-click the server in the tree → Connect.</p>
       {/if}
+
+      <SaveDialog
+        bind:this={saveDialog}
+        initialSql={tab.sql}
+        serverIdHint={tab.serverId}
+        onSaved={() => { savedListRefreshKey += 1; }}
+        onError={(msg) => (sidePanelError = msg)}
+      />
     {:else}
       <p class="muted">Select a database in the tree (left), or click + to open a tab.</p>
     {/if}
