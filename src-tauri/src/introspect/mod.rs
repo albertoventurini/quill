@@ -53,6 +53,16 @@ pub struct SchemaPayload {
     /// Wire-shape version.  Matches `PAYLOAD_VERSION` at write time.
     pub v: u32,
     pub schemas: Vec<SchemaInfo>,
+    /// Resolved `search_path` for the connecting user against this database.
+    ///
+    /// - `$user` is already substituted with `current_user`.
+    /// - The implicit `pg_catalog` prefix is **excluded** — only user-visible
+    ///   schemas appear.
+    /// - Schemas listed in `search_path` that do not exist are silently
+    ///   dropped (Postgres' own semantics — see `current_schemas`).
+    /// - Order matches priority: the first schema with a matching object
+    ///   wins for unqualified references.
+    pub search_path: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,6 +190,7 @@ pub async fn introspect_database(client: &Client) -> Result<SchemaPayload, Intro
     let mut relations = list_all_relations(client).await?;
     let mut columns_by_rel = list_all_columns(client).await?;
     let functions = list_all_functions(client).await?;
+    let search_path = fetch_search_path(client).await?;
 
     // Splice columns into their owning relations.  Relations not present in
     // the columns map (e.g. a view that returns zero columns — unusual but
@@ -229,6 +240,7 @@ pub async fn introspect_database(client: &Client) -> Result<SchemaPayload, Intro
     Ok(SchemaPayload {
         v: PAYLOAD_VERSION,
         schemas: by_schema.into_values().collect(),
+        search_path,
     })
 }
 
@@ -370,6 +382,17 @@ async fn list_all_functions(
     Ok(out)
 }
 
+/// Read the connecting user's effective `search_path` for the current
+/// database.  Uses `current_schemas(false)` so `$user` is server-resolved
+/// and `pg_catalog` is excluded.
+async fn fetch_search_path(client: &Client) -> Result<Vec<String>, IntrospectError> {
+    let row = client
+        .query_one("SELECT current_schemas(false) AS path", &[])
+        .await?;
+    let path: Vec<String> = row.try_get("path")?;
+    Ok(path)
+}
+
 // ---------------------------------------------------------------------------
 // Tests (payload (de)serialization only — DB tests live in tests/)
 // ---------------------------------------------------------------------------
@@ -414,11 +437,24 @@ mod tests {
                     kind: FunctionKind::Function,
                 }],
             }],
+            search_path: vec!["public".into()],
         };
 
         let s = serde_json::to_string(&payload).expect("serialize");
         let back: SchemaPayload = serde_json::from_str(&s).expect("deserialize");
         assert_eq!(payload, back);
+    }
+
+    #[test]
+    fn payload_search_path_round_trips_through_json() {
+        let payload = SchemaPayload {
+            v: PAYLOAD_VERSION,
+            schemas: Vec::new(),
+            search_path: vec!["alberto".into(), "common".into(), "public".into()],
+        };
+        let s = serde_json::to_string(&payload).expect("serialize");
+        let back: SchemaPayload = serde_json::from_str(&s).expect("deserialize");
+        assert_eq!(payload.search_path, back.search_path);
     }
 
     #[test]

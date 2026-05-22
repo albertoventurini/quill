@@ -102,7 +102,11 @@ export type SchemaInfoPayload = {
   functions: FunctionInfo[];
 };
 
-export type SchemaPayload = { v: number; schemas: SchemaInfoPayload[] };
+export type SchemaPayload = {
+  v: number;
+  schemas: SchemaInfoPayload[];
+  search_path: string[];
+};
 
 // ── Cancellation (mirrors commands::CancelOutcome) ──
 

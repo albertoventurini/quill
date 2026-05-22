@@ -300,3 +300,68 @@ async fn introspect_database_returns_columns_for_relations() {
 
     client.batch_execute("ROLLBACK").await.expect("rollback");
 }
+
+#[tokio::test]
+async fn introspect_database_captures_default_search_path() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+    let connector = connector_from(&dsn);
+    let (client, _cancel) = connector.connect(&dsn.database).await.expect("connect");
+
+    let payload = introspect::introspect_database(&client)
+        .await
+        .expect("introspect_database");
+
+    assert!(
+        payload.search_path.iter().any(|s| s == "public"),
+        "default search_path should include `public`; got {:?}",
+        payload.search_path,
+    );
+    assert!(
+        !payload.search_path.iter().any(|s| s == "pg_catalog"),
+        "pg_catalog must be excluded from search_path; got {:?}",
+        payload.search_path,
+    );
+
+    PgConnector::close(client).await;
+}
+
+#[tokio::test]
+async fn introspect_database_resolves_dollar_user_in_search_path() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+    let connector = connector_from(&dsn);
+    let (client, _cancel) = connector.connect(&dsn.database).await.expect("connect");
+
+    client.batch_execute("BEGIN").await.expect("begin");
+    client
+        .batch_execute(&format!(
+            "CREATE SCHEMA \"{}\"",
+            dsn.username.replace('"', "\"\"")
+        ))
+        .await
+        .expect("create user schema");
+    client
+        .batch_execute("SET search_path = \"$user\", public")
+        .await
+        .expect("set search_path");
+
+    let payload = introspect::introspect_database(&client)
+        .await
+        .expect("introspect_database");
+
+    assert_eq!(
+        payload.search_path,
+        vec![dsn.username.clone(), "public".to_string()],
+        "search_path must have $user resolved to {} and exclude pg_catalog",
+        dsn.username,
+    );
+
+    client.batch_execute("ROLLBACK").await.expect("rollback");
+
+    PgConnector::close(client).await;
+}
