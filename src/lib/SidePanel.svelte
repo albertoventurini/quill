@@ -8,11 +8,13 @@
 
   let {
     selectedServerId,
+    height = 240,
     resolveDb,
     onOpenInNewTab,
     onError,
   }: {
     selectedServerId: number | null;
+    height?: number;
     resolveDb: (serverId: number) => string;
     onOpenInNewTab: (serverId: number, database: string, sql: string) => void;
     onError: (msg: string) => void;
@@ -183,7 +185,7 @@
   }
 </script>
 
-<div class="panel">
+<div class="panel" style="height: {height}px">
   <div class="sub-tabs">
     <button
       class="sub-tab"
@@ -274,7 +276,6 @@
     display: flex;
     flex-direction: column;
     border-top: 1px solid #ccc;
-    min-height: 240px;
     overflow: hidden;
   }
   .sub-tabs {

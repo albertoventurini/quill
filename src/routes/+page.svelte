@@ -19,6 +19,7 @@ import Tabs from "$lib/Tabs.svelte";
 import { makeTab, type Tab } from "$lib/tabs";
 import SidePanel from "$lib/SidePanel.svelte";
 import SaveDialog from "$lib/SaveDialog.svelte";
+import Resizer from "$lib/Resizer.svelte";
 import { save } from "@tauri-apps/plugin-dialog";
 import { encodeCsv } from "$lib/csv";
 
@@ -72,6 +73,22 @@ import { encodeCsv } from "$lib/csv";
   let sidePanelError = $state<string | null>(null);
   let saveDialog = $state<SaveDialog | undefined>(undefined);
   let savedListRefreshKey = $state(0);
+
+  let leftPaneWidth = $state(320);
+  let editorHeight = $state(220);
+  let sidePanelHeight = $state(240);
+
+  function resizeLeftPane(delta: number) {
+    leftPaneWidth = Math.max(180, Math.min(window.innerWidth * 0.5, leftPaneWidth + delta));
+  }
+
+  function resizeEditor(delta: number) {
+    editorHeight = Math.max(160, editorHeight + delta);
+  }
+
+  function resizeSidePanel(delta: number) {
+    sidePanelHeight = Math.max(120, sidePanelHeight - delta);
+  }
 
   // ═════════════════ Initial load ═════════════════
 
@@ -596,7 +613,7 @@ import { encodeCsv } from "$lib/csv";
 
 <div class="shell">
   <!-- ═══════ LEFT PANE ═══════ -->
-  <aside class="left-pane">
+  <aside class="left-pane" style="width: {leftPaneWidth}px">
     <div class="header-row">
       <h2>Connections</h2>
       <button class="btn" onclick={openAddModal}>+ Add</button>
@@ -624,7 +641,10 @@ import { encodeCsv } from "$lib/csv";
       </div>
     {/if}
 
+    <Resizer orientation="vertical" onResize={resizeSidePanel} />
+
     <SidePanel
+      height={sidePanelHeight}
       selectedServerId={selectedDb?.serverId ?? null}
       resolveDb={defaultDbForServer}
       onOpenInNewTab={openInNewTab}
@@ -638,6 +658,8 @@ import { encodeCsv } from "$lib/csv";
       </p>
     {/if}
   </aside>
+
+  <Resizer orientation="horizontal" onResize={resizeLeftPane} />
 
   <!-- ═══════ RIGHT PANE ═══════ -->
   <main class="right-pane">
@@ -658,6 +680,7 @@ import { encodeCsv } from "$lib/csv";
       {#key tab.id}
         <Editor
           bind:this={editor}
+          height={editorHeight}
           initial={tab.sql}
           onChange={(doc) => { tab.sql = doc; }}
           onRun={(payload) => runFromEditor(payload)}
@@ -687,6 +710,8 @@ import { encodeCsv } from "$lib/csv";
           {tab.lastError.message}
         </p>
       {/if}
+
+      <Resizer orientation="vertical" onResize={resizeEditor} />
 
       {#if tab.active}
         <ResultGrid
@@ -815,13 +840,13 @@ import { encodeCsv } from "$lib/csv";
 <style>
   :global(html), :global(body) { margin: 0; padding: 0; overflow: hidden; }
   .shell { display: flex; flex-direction: row; height: 100vh; overflow: hidden; }
-  .left-pane { width: 320px; min-width: 320px; flex-shrink: 0; border-right: 1px solid #ccc; padding: 0.75rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
+  .left-pane { border-right: 1px solid #ccc; padding: 0.75rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
   .right-pane { flex: 1; min-width: 0; min-height: 0; padding: 1rem; overflow: hidden; display: flex; flex-direction: column; gap: 0.5rem; }
 
   .header-row { display: flex; align-items: center; justify-content: space-between; }
   h2, h3 { margin: 0; font-size: 1.05rem; }
 
-  .tree { display: flex; flex-direction: column; }
+  .tree { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
   .server-block { display: flex; flex-direction: column; }
   .server-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
   .slot-badge { font-size: 0.8rem; color: #666; font-variant-numeric: tabular-nums; padding-right: 0.3rem; }

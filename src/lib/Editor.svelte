@@ -25,11 +25,13 @@
 
   let {
     initial = "SELECT 1",
+    height = 220,
     onChange,
     onRun,
     getContext = () => null as EditorContext,
   }: {
     initial?: string;
+    height?: number;
     onChange: (doc: string) => void;
     onRun: (payload: {
       text: string;
@@ -120,11 +122,10 @@
   });
 </script>
 
-<div class="editor-host" bind:this={host}></div>
+<div class="editor-host" style="height: {height}px" bind:this={host}></div>
 
 <style>
   .editor-host {
-    height: 220px;
     border: 1px solid #aaa;
     border-radius: 4px;
     overflow: hidden;
