@@ -19,12 +19,14 @@
     selectedDb,
     onSelectDb,
     onContextMenu,
+    onConnectServer,
   }: {
     node: TreeNode;
     isConnected: (serverId: number) => boolean;
     selectedDb: { serverId: number; database: string } | null;
     onSelectDb: (serverId: number, database: string) => void;
     onContextMenu: (e: MouseEvent, target: ContextMenuTarget) => void;
+    onConnectServer?: (id: number) => void;
   } = $props();
 
   async function toggleExpand() {
@@ -58,7 +60,10 @@
       const db = "database" in node ? node.database : "";
       if (db) onSelectDb(sid, db);
     } else if (node.kind === "server") {
-      // Selecting a server picks its default_db as the active DB.
+      if (!isConnected(node.conn.id)) {
+        onConnectServer?.(node.conn.id);
+        return;
+      }
       onSelectDb(node.conn.id, node.conn.default_db);
     }
   }
@@ -124,6 +129,7 @@
             {selectedDb}
             {onSelectDb}
             {onContextMenu}
+            {onConnectServer}
           />
         {/each}
       </div>

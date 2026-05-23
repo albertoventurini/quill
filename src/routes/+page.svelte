@@ -615,6 +615,7 @@ import { encodeCsv } from "$lib/csv";
                 {selectedDb}
                 onSelectDb={selectDb}
                 onContextMenu={openMenu}
+                onConnectServer={promptPassword}
               />
               <span class="slot-badge">{slotLabel(connectedState[serverNode.conn.id])}</span>
             </div>
@@ -812,9 +813,10 @@ import { encodeCsv } from "$lib/csv";
 </dialog>
 
 <style>
-  .shell { display: flex; height: 100vh; }
-  .left-pane { width: 320px; min-width: 320px; border-right: 1px solid #ccc; padding: 0.75rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
-  .right-pane { flex: 1; padding: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
+  :global(html), :global(body) { margin: 0; padding: 0; overflow: hidden; }
+  .shell { display: flex; flex-direction: row; height: 100vh; overflow: hidden; }
+  .left-pane { width: 320px; min-width: 320px; flex-shrink: 0; border-right: 1px solid #ccc; padding: 0.75rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
+  .right-pane { flex: 1; min-width: 0; min-height: 0; padding: 1rem; overflow: hidden; display: flex; flex-direction: column; gap: 0.5rem; }
 
   .header-row { display: flex; align-items: center; justify-content: space-between; }
   h2, h3 { margin: 0; font-size: 1.05rem; }
