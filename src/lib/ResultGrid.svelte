@@ -165,6 +165,7 @@
   <table>
     <thead>
       <tr>
+        <th class="rownum-header" style="width:2em;min-width:2em;max-width:2em"></th>
         {#each columns as col, i (i)}
           <th style={widths[i] != null ? `width:${widths[i]}px` : ""}>
             <button
@@ -189,8 +190,9 @@
       </tr>
     </thead>
     <tbody>
-      {#each sortedRows as row (row)}
+      {#each sortedRows as row, rowIdx (row)}
         <tr>
+          <td class="rownum" style="width:2em;min-width:2em;max-width:2em;padding:0.25rem 0.15rem">{rowIdx + 1}</td>
           {#each columns as _, i (i)}
             {@const v = row[i]}
             <td
@@ -262,12 +264,17 @@
   th {
     position: sticky;
     top: 0;
+    z-index: 1;
     background: #f0f0f0;
     border-bottom: 1px solid #aaa;
     border-right: 1px solid #ddd;
     padding: 0;
     text-align: left;
     white-space: nowrap;
+  }
+  th.rownum-header {
+    left: 0;
+    z-index: 2;
   }
   .header-button {
     display: flex;
@@ -325,6 +332,17 @@
   }
   td.previewable:hover {
     background: #f0f0ff;
+  }
+  td.rownum {
+    position: sticky;
+    left: 0;
+    z-index: 1;
+    text-align: right;
+    color: #999;
+    background: #fafafa;
+    border-right: 1px solid #ddd;
+    font-variant-numeric: tabular-nums;
+    font-family: inherit;
   }
   .load-more-row {
     padding: 0.4rem 0;
