@@ -13,7 +13,7 @@
   import { statementAtCursor } from "$lib/statement";
   import Tree from "$lib/Tree.svelte";
   import type { ServerNode, TreeNode, DatabaseNode } from "$lib/tree";
-  import { clearDatabaseSubtree, errorMessage } from "$lib/tree";
+  import { clearDatabaseSubtree, errorMessage, loadDatabases } from "$lib/tree";
   import { clearServerSchemaPayloads } from "$lib/schemaStore";
 import Tabs from "$lib/Tabs.svelte";
 import { makeTab, type Tab } from "$lib/tabs";
@@ -172,8 +172,13 @@ import { encodeCsv } from "$lib/csv";
     pwError = "";
     try {
       const state = await api.connectServer(pwTargetId, pwPassword);
-      connectedState[pwTargetId] = state;
-      pwDialog?.close();
+        connectedState[pwTargetId] = state;
+        const serverNode = tree.find((n) => n.conn.id === pwTargetId);
+        if (serverNode) {
+          serverNode.expanded = true;
+          loadDatabases(serverNode);
+        }
+        pwDialog?.close();
     } catch (err) {
       pwError = errorMessage(err);
     }
@@ -479,6 +484,7 @@ import { encodeCsv } from "$lib/csv";
         rowCount: r.row_count_so_far,
         durationMs: r.duration_ms_so_far,
       };
+      if (!r.has_more) tab.active.resultId = "";
     } catch (err) {
       tab.lastError = err as CommandError;
     } finally {

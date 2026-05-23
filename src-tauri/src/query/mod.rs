@@ -158,16 +158,31 @@ pub async fn run_query(
     let row_count = first_chunk.len();
     let has_more = row_count == chunk_size;
 
-    let open = OpenResult {
-        guard,
-        cursor_name,
-        columns: columns.clone(),
-        row_count_so_far: row_count,
-        duration_ms_so_far,
-        has_more,
-        server_id,
-    };
-    results.by_id.insert(result_id, open);
+    if has_more {
+        results.by_id.insert(
+            result_id,
+            OpenResult {
+                guard,
+                cursor_name,
+                columns: columns.clone(),
+                row_count_so_far: row_count,
+                duration_ms_so_far,
+                has_more,
+                server_id,
+            },
+        );
+    } else {
+        let mut open = OpenResult {
+            guard,
+            cursor_name,
+            columns: columns.clone(),
+            row_count_so_far: row_count,
+            duration_ms_so_far,
+            has_more,
+            server_id,
+        };
+        let _ = close_open(&mut open).await;
+    }
 
     Ok(RunResult {
         result_id: result_id.to_string(),
