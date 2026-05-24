@@ -1,6 +1,7 @@
 {
   "name": "quill",
   "version": "0.1.0",
+  "packageManager": "pnpm@11.1.2",
   "description": "",
   "type": "module",
   "scripts": {
