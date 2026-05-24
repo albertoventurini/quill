@@ -122,6 +122,13 @@
   let previewDialog = $state<HTMLDialogElement | null>(null);
   let previewText = $state("");
 
+  // ── Cell selection ──
+
+  let selectedCell = $state<{ row: unknown[]; colIdx: number } | null>(null);
+
+  // Clear selection when the result set changes.
+  $effect(() => { rows; selectedCell = null; });
+
   function openPreview(value: unknown) {
     previewText = stringify(value);
     previewDialog?.showModal();
@@ -160,8 +167,19 @@
 
 <div class="status-line">{statusLine}</div>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="grid-scroll" oncontextmenu={openGridMenu}>
+<!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_tabindex -->
+<div
+  class="grid-scroll"
+  oncontextmenu={openGridMenu}
+  onkeydown={(e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "c" && selectedCell) {
+      e.preventDefault();
+      const val = selectedCell.row[selectedCell.colIdx];
+      navigator.clipboard.writeText(stringify(val)).catch(() => {});
+    }
+  }}
+  tabindex="0"
+>
   <table>
     <thead>
       <tr>
@@ -198,7 +216,11 @@
             <td
               class:nullable={v === null}
               class:previewable={shouldPreview(v)}
-              onclick={() => shouldPreview(v) && openPreview(v)}
+              class:selected={selectedCell?.row === row && selectedCell?.colIdx === i}
+              onclick={() => {
+                selectedCell = { row, colIdx: i };
+                if (shouldPreview(v)) openPreview(v);
+              }}
             >
               {cellDisplay(v)}
             </td>
@@ -332,6 +354,11 @@
   }
   td.previewable:hover {
     background: #f0f0ff;
+  }
+  td.selected {
+    outline: 2px solid #3366cc;
+    outline-offset: -2px;
+    background: #e8f0fe;
   }
   td.rownum {
     position: sticky;
