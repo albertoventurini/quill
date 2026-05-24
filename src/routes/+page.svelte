@@ -669,17 +669,19 @@ import { encodeCsv } from "$lib/csv";
 
   <!-- ═══════ RIGHT PANE ═══════ -->
   <main class="right-pane">
-    <Tabs
-      {tabs}
-      activeId={activeTabId}
-      treeServerId={selectedDb?.serverId ?? null}
-      treeDatabase={selectedDb?.database ?? null}
-      serverNameLookup={(id) => connections.find((c) => c.id === id)?.name ?? "?"}
-      onSelect={selectTab}
-      onClose={closeTab}
-      onAdd={addTab}
-      onChangeDatabase={openChangeDbDialog}
-    />
+    {#if selectedDb}
+      <Tabs
+        {tabs}
+        activeId={activeTabId}
+        treeServerId={selectedDb.serverId}
+        treeDatabase={selectedDb.database}
+        serverNameLookup={(id) => connections.find((c) => c.id === id)?.name ?? "?"}
+        onSelect={selectTab}
+        onClose={closeTab}
+        onAdd={addTab}
+        onChangeDatabase={openChangeDbDialog}
+      />
+    {/if}
 
     {#if activeTab}
       {@const tab = activeTab}
@@ -747,7 +749,7 @@ import { encodeCsv } from "$lib/csv";
         onError={(msg) => (sidePanelError = msg)}
       />
     {:else}
-      <p class="muted">Select a database in the tree (left), or click + to open a tab.</p>
+      <p class="muted">Connect to a server and select a database in the tree (left) to get started.</p>
     {/if}
   </main>
 </div>
