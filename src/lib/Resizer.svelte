@@ -11,10 +11,13 @@
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
     const start = orientation === "horizontal" ? e.clientX : e.clientY;
+    let prev = start;
 
     function move(ev: PointerEvent) {
       const current = orientation === "horizontal" ? ev.clientX : ev.clientY;
-      onResize(current - start);
+      const delta = current - prev;
+      prev = current;
+      onResize(delta);
     }
 
     function up() {
