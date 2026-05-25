@@ -51,7 +51,7 @@ import { save } from "@tauri-apps/plugin-dialog";
   // Settings dialog
   let settingsDialog = $state<HTMLDialogElement | null>(null);
   let baoAddr = $state("");
-  let baoOidcRole = $state("default");
+  let baoOidcRole = $state("");
   let baoHasToken = $state(false);
   let baoStatusError = $state("");
   let baoLoginBusy = $state(false);
@@ -269,7 +269,10 @@ import { save } from "@tauri-apps/plugin-dialog";
     try {
       const settings = await api.getAllSettings();
       baoAddr = settings["openbao_addr"] ?? "";
-      baoOidcRole = settings["openbao_oidc_role"] ?? "default";
+      // "default" was a bad shipped default, not a real role name; treat it as blank, which
+      // tells OpenBao to use the mount's configured default role.
+      const storedRole = settings["openbao_oidc_role"] ?? "";
+      baoOidcRole = storedRole === "default" ? "" : storedRole;
       baoHasToken = "openbao_token" in settings;
       baoStatusError = "";
     } catch (err) {
@@ -1029,10 +1032,10 @@ import { save } from "@tauri-apps/plugin-dialog";
              placeholder="https://vault.internal:8200" />
     </label>
     <label class="field">
-      OIDC role
+      OIDC role <span style="opacity: 0.6;">(blank = server default)</span>
       <input class="input"
              bind:value={baoOidcRole}
-             placeholder="default" />
+             placeholder="leave blank for default role" />
     </label>
     <button class="btn btn-primary" onclick={saveBaoSettings}>Save settings</button>
 

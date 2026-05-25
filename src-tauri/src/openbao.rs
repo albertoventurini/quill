@@ -190,24 +190,30 @@ pub async fn start_oidc_login(
 
     let client = reqwest::Client::new();
 
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")
-        .map_err(|e| OpenBaoError::LoginCallback(format!("bind failed: {e}")))?;
-    let port = listener.local_addr().unwrap().port();
-    let redirect_uri = format!("http://localhost:{port}/callback");
+    // The OIDC role pins an exact redirect_uri in its allowed_redirect_uris. Our org (like the
+    // Vault/OpenBao CLI default) registers http://localhost:8250/oidc/callback, so we bind that
+    // exact port and path — a random port is silently rejected (auth_url comes back empty).
+    let redirect_uri = "http://localhost:8250/oidc/callback";
+    let listener = std::net::TcpListener::bind("127.0.0.1:8250").map_err(|e| {
+        OpenBaoError::LoginCallback(format!(
+            "could not bind 127.0.0.1:8250 for the OIDC callback \
+             (another login in progress, or port already in use?): {e}"
+        ))
+    })?;
 
     let auth_url = format!(
-        "{}/v1/auth/oidc/auth_url",
+        "{}/v1/auth/oidc/oidc/auth_url",
         bao_addr.trim_end_matches('/')
     );
 
-    let resp = client
-        .post(&auth_url)
-        .json(&serde_json::json!({
-            "role": role,
-            "redirect_uri": &redirect_uri,
-        }))
-        .send()
-        .await?;
+    // An empty role tells OpenBao to use the mount's configured default_role — this is what the
+    // Vault UI's "Default" means. Only send `role` when the user configured an explicit one.
+    let mut body = serde_json::json!({ "redirect_uri": redirect_uri });
+    if !role.is_empty() {
+        body["role"] = serde_json::Value::String(role.to_string());
+    }
+
+    let resp = client.post(&auth_url).json(&body).send().await?;
 
     let status = resp.status();
     let body_text = resp.text().await.unwrap_or_default();
@@ -234,6 +240,15 @@ pub async fn start_oidc_login(
             ))
         })?;
 
+    if auth_url_resp.data.auth_url.is_empty() {
+        return Err(OpenBaoError::BadResponse(
+            "OpenBao returned an empty auth_url. The redirect_uri \
+             (http://localhost:8250/oidc/callback) is not in the OIDC role's \
+             allowed_redirect_uris, or the mount has no default role configured."
+                .into(),
+        ));
+    }
+
     app_handle
         .opener()
         .open_url(&auth_url_resp.data.auth_url, None::<&str>)
@@ -242,16 +257,15 @@ pub async fn start_oidc_login(
     let (code, state) = accept_callback(listener).await?;
 
     let cb_url = format!(
-        "{}/v1/auth/oidc/callback",
+        "{}/v1/auth/oidc/oidc/callback",
         bao_addr.trim_end_matches('/')
     );
 
+    // OpenBao's OIDC callback is a GET with state/code as query params (not a POST body) —
+    // posting returns 405 Method Not Allowed.
     let resp = client
-        .post(&cb_url)
-        .json(&serde_json::json!({
-            "state": state,
-            "code": code,
-        }))
+        .get(&cb_url)
+        .query(&[("state", state.as_str()), ("code", code.as_str())])
         .send()
         .await?;
 

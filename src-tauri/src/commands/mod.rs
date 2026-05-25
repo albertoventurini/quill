@@ -492,7 +492,7 @@ pub async fn login_openbao(
         &addr,
         &openbao::get_setting(&pool, "openbao_oidc_role")
             .await
-            .unwrap_or_else(|| "default".into()),
+            .unwrap_or_default(),
         &app,
     )
     .await?;
