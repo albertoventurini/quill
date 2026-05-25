@@ -20,6 +20,8 @@
     onSelectDb,
     onContextMenu,
     onConnectServer,
+    slotLabel,
+    expiryRemainingMs,
   }: {
     node: TreeNode;
     isConnected: (serverId: number) => boolean;
@@ -27,6 +29,8 @@
     onSelectDb: (serverId: number, database: string) => void;
     onContextMenu: (e: MouseEvent, target: ContextMenuTarget) => void;
     onConnectServer?: (id: number) => void;
+    slotLabel?: string;
+    expiryRemainingMs?: number;
   } = $props();
 
   async function toggleExpand() {
@@ -103,6 +107,16 @@
     >
       <span class="arrow">{arrow()}</span>
       <span class="label">{nodeLabel()}</span>
+      {#if node.kind === "server" && slotLabel}
+        <span class="slot-badge">{slotLabel}</span>
+      {/if}
+      {#if node.kind === "server" && expiryRemainingMs !== undefined && expiryRemainingMs < 300_000}
+        {#if expiryRemainingMs < 60_000}
+          <span class="expiry expiry-critical">expires in {Math.ceil(expiryRemainingMs / 1000)}s</span>
+        {:else}
+          <span class="expiry expiry-warn">expires in {Math.ceil(expiryRemainingMs / 60_000)}m</span>
+        {/if}
+      {/if}
       {#if "loading" in node && node.loading}
         <span class="loading">…</span>
       {/if}
@@ -191,6 +205,10 @@
     font-size: 0.85rem;
   }
   .label { flex: 1; }
+  .slot-badge { font-size: 0.8rem; color: var(--text-mid); font-variant-numeric: tabular-nums; }
+  .expiry { font-size: 0.75rem; margin-left: 0.3rem; }
+  .expiry-critical { color: var(--text-error); }
+  .expiry-warn { color: var(--text-warn, #e6a817); }
   .loading { color: var(--text-muted); font-style: italic; }
   .error { color: var(--text-error); font-weight: bold; cursor: help; }
   .empty-hint {

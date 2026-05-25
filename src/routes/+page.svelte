@@ -152,7 +152,7 @@ import { save } from "@tauri-apps/plugin-dialog";
   function slotLabel(s: SlotState | undefined): string {
     if (!s) return "";
     const busy = s.slots.filter((x) => x.busy).length;
-    return `[${busy}/${s.budget}]`;
+    return `(${s.budget - busy}/${s.budget})`;
   }
 
   // ═════════════════ Add connection (unchanged shape) ═════════════════
@@ -713,7 +713,7 @@ import { save } from "@tauri-apps/plugin-dialog";
     const parts = [
       `${a.rowCount.toLocaleString()} rows`,
       `${a.durationMs}ms`,
-      `slot [${busy}/${budget}]`,
+      `slot (${budget - busy}/${budget})`,
       `${serverName}@${tab.database}`,
       a.hasMore ? "cursor open" : "cursor closed",
     ];
@@ -797,8 +797,6 @@ import { save } from "@tauri-apps/plugin-dialog";
     {:else}
       <div class="tree">
         {#each tree as serverNode (serverNode.conn.id)}
-          <div class="server-block">
-            <div class="server-row">
               <Tree
                 node={serverNode}
                 {isConnected}
@@ -806,21 +804,10 @@ import { save } from "@tauri-apps/plugin-dialog";
                 onSelectDb={selectDb}
                 onContextMenu={openMenu}
                 onConnectServer={connectServer}
+                slotLabel={slotLabel(connectedState[serverNode.conn.id])}
+                expiryRemainingMs={expiryRemainingMs(connectedState[serverNode.conn.id])}
               />
-              <span class="slot-badge">
-                {slotLabel(connectedState[serverNode.conn.id])}
-                {#if connectedState[serverNode.conn.id]}
-                  {@const remaining = expiryRemainingMs(connectedState[serverNode.conn.id])}
-                  {#if remaining < 60_000}
-                    <span class="expiry expiry-critical">expires in {Math.ceil(remaining / 1000)}s</span>
-                  {:else if remaining < 300_000}
-                    <span class="expiry expiry-warn">expires in {Math.ceil(remaining / 60_000)}m</span>
-                  {/if}
-                {/if}
-              </span>
-            </div>
-          </div>
-        {/each}
+            {/each}
       </div>
     {/if}
 
@@ -1098,12 +1085,6 @@ import { save } from "@tauri-apps/plugin-dialog";
   h2, h3 { margin: 0; font-size: 1.05rem; }
 
   .tree { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
-  .server-block { display: flex; flex-direction: column; }
-  .server-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-  .slot-badge { font-size: 0.8rem; color: var(--text-mid); font-variant-numeric: tabular-nums; padding-right: 0.3rem; }
-  .expiry { font-size: 0.75rem; margin-left: 0.4rem; }
-  .expiry-warn { color: var(--text-warning); }
-  .expiry-critical { color: var(--text-error); font-weight: bold; }
 
   .btn { padding: 0.3rem 0.6rem; border: 1px solid var(--btn-border); border-radius: 4px; background: var(--btn-bg); cursor: pointer; font: inherit; font-size: 0.9rem; }
   .btn:hover { background: var(--btn-hover); }
