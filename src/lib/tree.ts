@@ -7,6 +7,7 @@
 //! the whole subtree on every state change prohibitive.
 
 import { api, type Connection, type RelationInfo, type FunctionInfo } from "./tauri";
+import type { ColumnInfo } from "./tauri";
 import { clearSchemaPayload } from "./schemaStore";
 
 // ── Node kinds ─────────────────────────────────────────────────────────
@@ -64,9 +65,29 @@ export type LeafNode = {
   leafKind:
     | "table" | "view" | "matview" | "partitioned_table"
     | "function" | "procedure" | "aggregate" | "window";
+  expanded: boolean;
+  /** Column children for relation leaves (table/view/matview/partitioned
+   *  table); `null` for functions, which are terminal. The columns ride
+   *  along with the relation in the cached schema payload, so expanding a
+   *  table costs no extra DB round-trip. An empty array (e.g. a view with
+   *  no output columns) renders as non-expandable. */
+  children: ColumnNode[] | null;
 };
 
-export type TreeNode = ServerNode | DatabaseNode | SchemaNode | GroupNode | LeafNode;
+export type ColumnNode = {
+  kind: "column";
+  serverId: number;
+  database: string;
+  schema: string;
+  relation: string;
+  name: string;
+  typeName: string;
+  notNull: boolean;
+  position: number;
+};
+
+export type TreeNode =
+  | ServerNode | DatabaseNode | SchemaNode | GroupNode | LeafNode | ColumnNode;
 
 // ── Loaders (called by Tree.svelte when expand fires) ──────────────────
 
@@ -145,6 +166,19 @@ function buildGroups(
 ): GroupNode[] {
   const groups: GroupNode[] = [];
 
+  const columnNodes = (r: RelationInfo): ColumnNode[] =>
+    r.columns.map((c: ColumnInfo) => ({
+      kind: "column",
+      serverId: node.serverId,
+      database: node.database,
+      schema: node.name,
+      relation: r.name,
+      name: c.name,
+      typeName: c.type_name,
+      notNull: c.not_null,
+      position: c.position,
+    }));
+
   const leafFromRelation = (r: RelationInfo): LeafNode => ({
     kind: "leaf",
     serverId: node.serverId,
@@ -152,6 +186,8 @@ function buildGroups(
     schema: node.name,
     name: r.name,
     leafKind: r.kind,
+    expanded: false,
+    children: columnNodes(r),
   });
   const leafFromFunction = (f: FunctionInfo): LeafNode => ({
     kind: "leaf",
@@ -160,6 +196,8 @@ function buildGroups(
     schema: node.name,
     name: f.name,
     leafKind: f.kind,
+    expanded: false,
+    children: null,
   });
 
   const tables = relations.filter((r) => r.kind === "table").map(leafFromRelation);
@@ -212,13 +250,16 @@ export function errorMessage(e: unknown): string {
   return String(e);
 }
 
-/** Short, single-character kind label rendered next to leaf names. */
+/** Short kind label rendered next to leaf names. Relations live under a
+ *  group header that already names their kind ("Tables", "Views", …), so no
+ *  tag is needed there. The "Functions" group mixes kinds, so functions,
+ *  procedures, aggregates and windows keep a distinguishing tag. */
 export function kindTag(kind: LeafNode["leafKind"]): string {
   switch (kind) {
-    case "table": return "[T]";
-    case "view": return "[V]";
-    case "matview": return "[M]";
-    case "partitioned_table": return "[P]";
+    case "table":
+    case "view":
+    case "matview":
+    case "partitioned_table": return "";
     case "function": return "[F]";
     case "procedure": return "[Proc]";
     case "aggregate": return "[Agg]";

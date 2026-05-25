@@ -469,6 +469,7 @@ import { save } from "@tauri-apps/plugin-dialog";
       case "schema": return `${t.database}.${t.name}`;
       case "group": return ""; // not meaningful
       case "leaf": return `${t.schema}.${t.name}`;
+      case "column": return t.name;
     }
   }
 
@@ -495,6 +496,8 @@ import { save } from "@tauri-apps/plugin-dialog";
     } else if (t.kind === "schema" || t.kind === "leaf") {
       items.push({ action: "refresh", label: "Refresh schema" });
       items.push({ action: "copy-name", label: "Copy qualified name" });
+    } else if (t.kind === "column") {
+      items.push({ action: "copy-name", label: "Copy column name" });
     } else if (t.kind === "group") {
       items.push({ action: "refresh", label: "Refresh schema" });
     }

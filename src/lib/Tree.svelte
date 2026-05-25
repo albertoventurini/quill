@@ -34,7 +34,16 @@
   } = $props();
 
   async function toggleExpand() {
-    if (node.kind === "leaf") return;
+    if (node.kind === "column") return;
+
+    // Relation leaves expand to show their columns (already loaded with the
+    // schema payload — no fetch). Function leaves have no columns.
+    if (node.kind === "leaf") {
+      if (node.children && node.children.length > 0) {
+        node.expanded = !node.expanded;
+      }
+      return;
+    }
 
     // Server node: refuse to expand if disconnected.
     if (node.kind === "server" && !isConnected(node.conn.id)) {
@@ -58,7 +67,10 @@
   function onNodeClick() {
     if (node.kind === "database") {
       onSelectDb(node.serverId, node.name);
-    } else if (node.kind === "schema" || node.kind === "leaf" || node.kind === "group") {
+    } else if (
+      node.kind === "schema" || node.kind === "leaf" ||
+      node.kind === "group" || node.kind === "column"
+    ) {
       // Inherit DB from the enclosing context.
       const sid = node.serverId;
       const db = "database" in node ? node.database : "";
@@ -86,12 +98,21 @@
       case "database": return node.name;
       case "schema": return node.name;
       case "group": return `${node.label} (${node.children.length})`;
-      case "leaf": return `${kindTag(node.leafKind)} ${node.name}`;
+      case "leaf": {
+        const tag = kindTag(node.leafKind);
+        return tag ? `${tag} ${node.name}` : node.name;
+      }
+      case "column": return node.name;
     }
   }
 
   function arrow(): string {
-    if (node.kind === "leaf") return "  ";
+    if (node.kind === "column") return "  ";
+    if (node.kind === "leaf") {
+      return node.children && node.children.length > 0
+        ? (node.expanded ? "▾" : "▸")
+        : "  ";
+    }
     return node.expanded ? "▾" : "▸";
   }
 </script>
@@ -106,7 +127,11 @@
       onclick={() => { onNodeClick(); toggleExpand(); }}
     >
       <span class="arrow">{arrow()}</span>
-      <span class="label">{nodeLabel()}</span>
+      <span class="label" class:col-name={node.kind === "column"}>{nodeLabel()}</span>
+      {#if node.kind === "column"}
+        <span class="coltype">{node.typeName}</span>
+        {#if node.notNull}<span class="notnull">not null</span>{/if}
+      {/if}
       {#if node.kind === "server" && slotLabel}
         <span class="slot-badge">{slotLabel}</span>
       {/if}
@@ -162,6 +187,7 @@
       case "schema": return `schema:${n.serverId}:${n.database}:${n.name}`;
       case "group": return `group:${n.serverId}:${n.database}:${n.schema}:${n.label}`;
       case "leaf": return `leaf:${n.serverId}:${n.database}:${n.schema}:${n.leafKind}:${n.name}`;
+      case "column": return `col:${n.serverId}:${n.database}:${n.schema}:${n.relation}:${n.name}`;
     }
   }
 </script>
@@ -205,6 +231,17 @@
     font-size: 0.85rem;
   }
   .label { flex: 1; }
+  .label.col-name { flex: 0 1 auto; }
+  .coltype {
+    font-size: 0.8rem;
+    color: var(--text-mid);
+    font-variant-numeric: tabular-nums;
+  }
+  .notnull {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    font-style: italic;
+  }
   .slot-badge { font-size: 0.8rem; color: var(--text-mid); font-variant-numeric: tabular-nums; }
   .expiry { font-size: 0.75rem; margin-left: 0.3rem; }
   .expiry-critical { color: var(--text-error); }
