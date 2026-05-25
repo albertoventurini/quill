@@ -35,6 +35,8 @@ pub struct Connection {
     pub ssl_mode: String,
     pub slot_budget: i32,
     pub password_ref: Option<String>,
+    pub credential_source: String,
+    pub bao_role_path: Option<String>,
     pub created_at: String,
 }
 
@@ -49,6 +51,8 @@ pub struct NewConnection {
     pub ssl_mode: String,
     pub slot_budget: i32,
     pub password_ref: Option<String>,
+    pub credential_source: String,
+    pub bao_role_path: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +99,7 @@ pub async fn open(app: &tauri::AppHandle) -> Result<SqlitePool, StoreError> {
 pub async fn list(pool: &SqlitePool) -> Result<Vec<Connection>, StoreError> {
     Ok(sqlx::query_as::<_, Connection>(
         "SELECT id, name, host, port, default_db, username, ssl_mode, slot_budget, \
-                password_ref, created_at \
+                password_ref, credential_source, bao_role_path, created_at \
          FROM connections \
          ORDER BY name",
     )
@@ -107,7 +111,7 @@ pub async fn list(pool: &SqlitePool) -> Result<Vec<Connection>, StoreError> {
 pub async fn get(pool: &SqlitePool, id: i64) -> Result<Option<Connection>, StoreError> {
     Ok(sqlx::query_as::<_, Connection>(
         "SELECT id, name, host, port, default_db, username, ssl_mode, slot_budget, \
-                password_ref, created_at \
+                password_ref, credential_source, bao_role_path, created_at \
          FROM connections \
          WHERE id = ?",
     )
@@ -122,10 +126,10 @@ pub async fn insert(pool: &SqlitePool, c: NewConnection) -> Result<Connection, S
     // SQLite 3.35+; all modern systems ship a recent enough SQLite.
     Ok(sqlx::query_as::<_, Connection>(
         "INSERT INTO connections (name, host, port, default_db, username, ssl_mode, \
-                                  slot_budget, password_ref) \
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?) \
+                                  slot_budget, password_ref, credential_source, bao_role_path) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) \
          RETURNING id, name, host, port, default_db, username, ssl_mode, slot_budget, \
-                   password_ref, created_at",
+                   password_ref, credential_source, bao_role_path, created_at",
     )
     .bind(&c.name)
     .bind(&c.host)
@@ -135,6 +139,8 @@ pub async fn insert(pool: &SqlitePool, c: NewConnection) -> Result<Connection, S
     .bind(&c.ssl_mode)
     .bind(c.slot_budget)
     .bind(&c.password_ref)
+    .bind(&c.credential_source)
+    .bind(&c.bao_role_path)
     .fetch_one(pool)
     .await?)
 }
@@ -146,6 +152,35 @@ pub async fn delete(pool: &SqlitePool, id: i64) -> Result<(), StoreError> {
         .execute(pool)
         .await?;
     Ok(())
+}
+
+pub async fn update(
+    pool: &SqlitePool,
+    id: i64,
+    c: NewConnection,
+) -> Result<Connection, StoreError> {
+    Ok(sqlx::query_as::<_, Connection>(
+        "UPDATE connections SET \
+            name = ?, host = ?, port = ?, default_db = ?, username = ?, \
+            ssl_mode = ?, slot_budget = ?, password_ref = ?, \
+            credential_source = ?, bao_role_path = ? \
+         WHERE id = ? \
+         RETURNING id, name, host, port, default_db, username, ssl_mode, \
+                     slot_budget, password_ref, credential_source, bao_role_path, created_at",
+    )
+    .bind(&c.name)
+    .bind(&c.host)
+    .bind(c.port)
+    .bind(&c.default_db)
+    .bind(&c.username)
+    .bind(&c.ssl_mode)
+    .bind(c.slot_budget)
+    .bind(&c.password_ref)
+    .bind(&c.credential_source)
+    .bind(&c.bao_role_path)
+    .bind(id)
+    .fetch_one(pool)
+    .await?)
 }
 
 // ---------------------------------------------------------------------------
@@ -187,9 +222,11 @@ mod tests {
             username: "alice".into(),
             ssl_mode: "prefer".into(),
             slot_budget: 2,
-            password_ref: None,
-        }
+        password_ref: None,
+        credential_source: "password".into(),
+        bao_role_path: None,
     }
+}
 
     #[tokio::test]
     async fn test_migration_runs_cleanly() {

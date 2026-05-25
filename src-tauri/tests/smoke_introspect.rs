@@ -70,6 +70,8 @@ async fn fresh_pool_and_server(dsn: &TestDsn) -> (sqlx::SqlitePool, ServerRegist
             ssl_mode: "disable".into(),
             slot_budget: 2,
             password_ref: None,
+            credential_source: "password".into(),
+            bao_role_path: None,
         },
     )
     .await

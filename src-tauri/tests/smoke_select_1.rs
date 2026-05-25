@@ -75,6 +75,8 @@ async fn full_cycle_store_to_disconnect() {
             ssl_mode: "disable".into(),
             slot_budget: 2,
             password_ref: None,
+            credential_source: "password".into(),
+            bao_role_path: None,
         },
     )
     .await

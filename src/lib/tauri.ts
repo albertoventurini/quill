@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 // ── Connection types (mirrors store::Connection / store::NewConnection) ──
 
+export type CredentialSource = "password" | "openbao";
+
 export type Connection = {
   id: number;
   name: string;
@@ -12,6 +14,8 @@ export type Connection = {
   ssl_mode: string;
   slot_budget: number;
   password_ref: string | null;
+  credential_source: string;
+  bao_role_path: string | null;
   created_at: string;
 };
 
@@ -26,6 +30,8 @@ export type NewConnection = {
   ssl_mode: string;
   slot_budget: number;
   password_ref: null;
+  credential_source: string;
+  bao_role_path: string | null;
 };
 
 // ── Slot types (mirrors slots::SlotState / slots::SlotInfo) ──
@@ -181,7 +187,8 @@ export type CommandError = {
     | "Pg"
     | "Store"
     | "Introspect"
-    | "Saved";
+    | "Saved"
+    | "OpenBao";
   message: string;
 };
 
@@ -200,8 +207,11 @@ export const api = {
   deleteConnection: (id: number) =>
     invoke<void>("delete_connection", { id }),
 
-  connectServer: (id: number, password: string) =>
+  connectServer: (id: number, password: string | null) =>
     invoke<SlotState>("connect_server", { id, password }),
+
+  updateConnection: (id: number, update: NewConnection) =>
+    invoke<Connection>("update_connection", { id, new: update }),
 
   disconnectServer: (id: number) =>
     invoke<void>("disconnect_server", { id }),

@@ -8,6 +8,7 @@ pub mod registry;
 pub mod saved;
 pub mod slots;
 pub mod store;
+pub mod openbao;
 
 use tauri::Manager;
 
@@ -27,6 +28,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_connections,
             commands::save_connection,
+            commands::update_connection,
             commands::delete_connection,
             commands::connect_server,
             commands::disconnect_server,

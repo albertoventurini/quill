@@ -36,6 +36,7 @@ pub enum CommandError {
     Store(String),
     Introspect(String),
     Saved(String),
+    OpenBao(String),
 }
 
 impl std::fmt::Display for CommandError {
@@ -47,7 +48,8 @@ impl std::fmt::Display for CommandError {
             | Self::Pg(msg)
             | Self::Store(msg)
             | Self::Introspect(msg)
-            | Self::Saved(msg) => write!(f, "{msg}"),
+            | Self::Saved(msg)
+            | Self::OpenBao(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -226,6 +228,21 @@ pub async fn save_connection(
     Ok(store::insert(&pool, new).await?)
 }
 
+#[tauri::command]
+pub async fn update_connection(
+    id: i64,
+    new: store::NewConnection,
+    pool: State<'_, sqlx::SqlitePool>,
+    registry: State<'_, ServerRegistry>,
+) -> Result<store::Connection, CommandError> {
+    if registry.by_id.contains_key(&id) {
+        return Err(CommandError::OpenBao(
+            "Disconnect the server before editing its configuration.".into(),
+        ));
+    }
+    Ok(store::update(&pool, id, new).await?)
+}
+
 /// Delete a saved connection by id.  Does nothing if the id doesn't exist.
 #[tauri::command]
 pub async fn delete_connection(
@@ -249,21 +266,28 @@ pub async fn delete_connection(
 #[tauri::command]
 pub async fn connect_server(
     id: i64,
-    password: String,
+    password: Option<String>,
     pool: State<'_, sqlx::SqlitePool>,
     registry: State<'_, ServerRegistry>,
 ) -> Result<SlotState, CommandError> {
-    // Already connected?  Return current state immediately.
     if let Some(handle) = registry.by_id.get(&id) {
         return Ok(handle.slot_manager.state());
     }
 
-    // Load the saved connection from the store.
     let conn = store::get(&pool, id)
         .await?
         .ok_or_else(|| CommandError::unknown_connection(id))?;
 
-    // Build a PgConnector.
+    if conn.credential_source == "openbao" {
+        return Err(CommandError::OpenBao(
+            "OpenBao credential source is not yet implemented.".into(),
+        ));
+    }
+
+    let password = password.ok_or_else(|| {
+        CommandError::Pg("password is required for password-based connections".into())
+    })?;
+
     let ssl_mode =
         PgConnector::parse_ssl_mode(&conn.ssl_mode).map_err(|e| CommandError::Pg(e.0))?;
     let connector = PgConnector {
@@ -277,7 +301,6 @@ pub async fn connect_server(
     let budget = conn.slot_budget.max(1) as usize;
     let handle = ServerHandle::new(connector, budget);
     let state = handle.slot_manager.state();
-
     registry.by_id.insert(id, handle);
     Ok(state)
 }

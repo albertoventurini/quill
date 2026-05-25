@@ -266,6 +266,8 @@ mod tests {
                 ssl_mode: "prefer".into(),
                 slot_budget: 2,
                 password_ref: None,
+                credential_source: "password".into(),
+                bao_role_path: None,
             },
         )
         .await

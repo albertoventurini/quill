@@ -45,6 +45,8 @@ import { encodeCsv } from "$lib/csv";
   let pwPassword = $state("");
   let pwError = $state("");
 
+  let editingId = $state<number | null>(null);
+
   // Context menu (new).
   let menu = $state<{
     x: number;
@@ -120,6 +122,8 @@ import { encodeCsv } from "$lib/csv";
       ssl_mode: "disable",
       slot_budget: 2,
       password_ref: null,
+      credential_source: "password",
+      bao_role_path: null,
     };
   }
 
@@ -138,7 +142,26 @@ import { encodeCsv } from "$lib/csv";
   // ═════════════════ Add connection (unchanged shape) ═════════════════
 
   function openAddModal() {
+    editingId = null;
     addForm = defaultAddForm();
+    addError = "";
+    addDialog?.showModal();
+  }
+
+  function openEditModal(conn: Connection) {
+    editingId = conn.id;
+    addForm = {
+      name: conn.name,
+      host: conn.host,
+      port: conn.port,
+      default_db: conn.default_db,
+      username: conn.username,
+      ssl_mode: conn.ssl_mode,
+      slot_budget: conn.slot_budget,
+      password_ref: null,
+      credential_source: conn.credential_source,
+      bao_role_path: conn.bao_role_path,
+    };
     addError = "";
     addDialog?.showModal();
   }
@@ -147,11 +170,16 @@ import { encodeCsv } from "$lib/csv";
     e.preventDefault();
     addError = "";
     try {
-      await api.saveConnection({ ...addForm });
+      if (editingId !== null) {
+        await api.updateConnection(editingId, { ...addForm });
+      } else {
+        await api.saveConnection({ ...addForm });
+      }
       const rows = await api.listConnections();
       connections = rows;
       tree = rows.map(makeServerNode);
       addDialog?.close();
+      editingId = null;
     } catch (err) {
       addError = errorMessage(err);
     }
@@ -200,6 +228,7 @@ import { encodeCsv } from "$lib/csv";
     await api.disconnectServer(id);
     clearServerSchemaPayloads(id);
     delete connectedState[id];
+    if (editingId === id) editingId = null;
     const node = tree.find((n) => n.conn.id === id);
     if (node) {
       node.children = null;
@@ -281,6 +310,9 @@ import { encodeCsv } from "$lib/csv";
       case "connect":
         if (target.kind === "server") promptPassword(target.conn.id);
         break;
+      case "edit":
+        if (target.kind === "server") openEditModal(target.conn);
+        break;
       case "disconnect":
         if (target.kind === "server") await disconnect(target.conn.id);
         break;
@@ -316,9 +348,12 @@ import { encodeCsv } from "$lib/csv";
         items.push({ action: "disconnect", label: "Disconnect" });
       } else {
         items.push({ action: "connect", label: "Connect…" });
+        items.push({ action: "edit", label: "Edit connection…" });
       }
       items.push({ action: "copy-name", label: "Copy name" });
-      items.push({ action: "delete", label: "Delete connection" });
+      if (!isConnected(t.conn.id)) {
+        items.push({ action: "delete", label: "Delete connection" });
+      }
     } else if (t.kind === "database") {
       items.push({ action: "refresh", label: "Refresh schema" });
       items.push({ action: "copy-name", label: "Copy name" });
@@ -774,13 +809,20 @@ import { encodeCsv } from "$lib/csv";
 
 <!-- ═══════ ADD-CONNECTION DIALOG (unchanged from M1.6 shape) ═══════ -->
 <dialog bind:this={addDialog} class="modal">
-  <h2>Add Connection</h2>
+  <h2>{editingId !== null ? "Edit Connection" : "Add Connection"}</h2>
   <form onsubmit={saveConnection} class="add-form">
     <label class="field">Name<input class="input" bind:value={addForm.name} required /></label>
     <label class="field">Host<input class="input" bind:value={addForm.host} required /></label>
     <label class="field">Port<input class="input" type="number" min={1} max={65535} bind:value={addForm.port} /></label>
     <label class="field">Default database<input class="input" bind:value={addForm.default_db} required /></label>
     <label class="field">Username<input class="input" bind:value={addForm.username} required /></label>
+    <label class="field">
+      Credential source
+      <select class="input" bind:value={addForm.credential_source}>
+        <option value="password">Password</option>
+        <option value="openbao">OpenBao</option>
+      </select>
+    </label>
     <label class="field">
       SSL mode
       <select class="input" bind:value={addForm.ssl_mode}>
@@ -792,6 +834,14 @@ import { encodeCsv } from "$lib/csv";
       </select>
     </label>
     <label class="field">Slot budget<input class="input" type="number" min={1} max={16} bind:value={addForm.slot_budget} /></label>
+
+    {#if addForm.credential_source === "openbao"}
+      <label class="field">
+        Role path
+        <input class="input" bind:value={addForm.bao_role_path}
+               placeholder="database/creds/my-role" />
+      </label>
+    {/if}
 
     {#if addError}<p class="error">{addError}</p>{/if}
 
