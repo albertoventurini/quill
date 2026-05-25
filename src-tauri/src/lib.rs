@@ -51,6 +51,10 @@ pub fn run() {
             commands::delete_saved,
             commands::rename_saved,
             commands::write_text_file,
+            commands::login_openbao,
+            commands::get_openbao_status,
+            commands::clear_openbao_token,
+            commands::set_setting,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

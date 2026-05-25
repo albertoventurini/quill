@@ -75,6 +75,7 @@ pub enum SlotError {
 pub struct SlotState {
     pub budget: usize,
     pub slots: Vec<SlotInfo>,
+    pub credential_expiry: Option<SystemTime>,
 }
 
 /// Information about a single slot.
@@ -444,6 +445,7 @@ impl<C: Connector> SlotManager<C> {
                     }
                 })
                 .collect(),
+            credential_expiry: None,
         }
     }
 

@@ -8,10 +8,12 @@
 use secrecy::SecretString;
 use serde::Serialize;
 use serde_json::Value;
+use std::time::{Duration, SystemTime};
 use tauri::State;
 use tokio_postgres::Row;
 use tokio_postgres::types::Type;
 
+use crate::openbao;
 use crate::pg::PgConnector;
 use crate::query::{self, ChunkResult, DEFAULT_CHUNK_SIZE, ResultRegistry, RunResult};
 use crate::registry::{ServerHandle, ServerRegistry};
@@ -87,6 +89,12 @@ impl From<crate::history::HistoryError> for CommandError {
 impl From<crate::saved::SavedError> for CommandError {
     fn from(e: crate::saved::SavedError) -> Self {
         Self::Saved(e.to_string())
+    }
+}
+
+impl From<crate::openbao::OpenBaoError> for CommandError {
+    fn from(e: crate::openbao::OpenBaoError) -> Self {
+        Self::OpenBao(e.to_string())
     }
 }
 
@@ -256,11 +264,11 @@ pub async fn delete_connection(
 /// Connect to a saved server.
 ///
 /// 1. Load the `Connection` from the store; return `UnknownConnection` if missing.
-/// 2. Build a `PgConnector` from the row + the supplied password.
-/// 3. If the registry already contains a `ServerHandle` for `id`, reuse it
-///    (the password is ignored — the server is already running).
-/// 4. Otherwise, create a new `SlotManager<PgConnector>` with the row's
-///    `slot_budget` and insert it into the registry.
+/// 2. If the registry already contains a `ServerHandle` for `id`, reuse it.
+/// 3. Otherwise, route by `credential_source`:
+///    - `"password"` — build a `PgConnector` from the row + supplied password.
+///    - `"openbao"` — fetch dynamic credentials from OpenBao first.
+/// 4. Create a new `SlotManager<PgConnector>` with the row's `slot_budget`.
 /// 5. Return the current `SlotState`.  **No Postgres connection is opened**
 ///    (AGENTS.md principle 1).
 #[tauri::command]
@@ -271,35 +279,59 @@ pub async fn connect_server(
     registry: State<'_, ServerRegistry>,
 ) -> Result<SlotState, CommandError> {
     if let Some(handle) = registry.by_id.get(&id) {
-        return Ok(handle.slot_manager.state());
+        let mut state = handle.slot_manager.state();
+        state.credential_expiry = handle.credential_expiry;
+        return Ok(state);
     }
 
     let conn = store::get(&pool, id)
         .await?
         .ok_or_else(|| CommandError::unknown_connection(id))?;
 
-    if conn.credential_source == "openbao" {
-        return Err(CommandError::OpenBao(
-            "OpenBao credential source is not yet implemented.".into(),
-        ));
-    }
-
-    let password = password.ok_or_else(|| {
-        CommandError::Pg("password is required for password-based connections".into())
-    })?;
+    let (username, password, expiry) = match conn.credential_source.as_str() {
+        "password" => {
+            let pw = password.ok_or_else(|| {
+                CommandError::Pg("password is required for password-based connections".into())
+            })?;
+            (conn.username.clone(), SecretString::from(pw), None)
+        }
+        "openbao" => {
+            let bao = openbao::OpenBaoClient::from_store(&pool)
+                .await?
+                .ok_or_else(|| {
+                    CommandError::OpenBao(
+                        "OpenBao not configured. Set up the server address and login in Settings."
+                            .into(),
+                    )
+                })?;
+            let role_path = conn.bao_role_path.as_deref().ok_or_else(|| {
+                CommandError::OpenBao("no role path configured for this connection".into())
+            })?;
+            let creds = bao.fetch_pg_creds(role_path).await?;
+            let expiry =
+                SystemTime::now().checked_add(Duration::from_secs(creds.lease_duration_secs));
+            (creds.username, creds.password, expiry)
+        }
+        other => {
+            return Err(CommandError::Pg(format!(
+                "unknown credential_source: {other}"
+            )));
+        }
+    };
 
     let ssl_mode =
         PgConnector::parse_ssl_mode(&conn.ssl_mode).map_err(|e| CommandError::Pg(e.0))?;
     let connector = PgConnector {
         host: conn.host.clone(),
         port: conn.port as u16,
-        username: conn.username.clone(),
-        password: SecretString::from(password),
+        username,
+        password,
         ssl_mode,
     };
 
     let budget = conn.slot_budget.max(1) as usize;
-    let handle = ServerHandle::new(connector, budget);
+    let mut handle = ServerHandle::new(connector, budget);
+    handle.credential_expiry = expiry;
     let state = handle.slot_manager.state();
     registry.by_id.insert(id, handle);
     Ok(state)
@@ -436,10 +468,67 @@ pub fn get_slot_state(
     server_id: i64,
     registry: State<'_, ServerRegistry>,
 ) -> Result<Option<SlotState>, CommandError> {
-    Ok(registry
-        .by_id
-        .get(&server_id)
-        .map(|h| h.slot_manager.state()))
+    Ok(registry.by_id.get(&server_id).map(|h| {
+        let mut state = h.slot_manager.state();
+        state.credential_expiry = h.credential_expiry;
+        state
+    }))
+}
+
+#[tauri::command]
+pub async fn login_openbao(
+    pool: State<'_, sqlx::SqlitePool>,
+    app: tauri::AppHandle,
+) -> Result<String, CommandError> {
+    let addr = openbao::get_setting(&pool, "openbao_addr")
+        .await
+        .ok_or_else(|| {
+            CommandError::OpenBao(
+                "OpenBao address not configured. Set it in Settings.".into(),
+            )
+        })?;
+
+    let token = openbao::start_oidc_login(&addr, &app).await?;
+    openbao::set_setting(&pool, "openbao_token", &token).await?;
+    Ok("Login successful.".into())
+}
+
+#[derive(Debug, Serialize)]
+pub struct OpenBaoStatus {
+    pub configured: bool,
+    pub has_token: bool,
+    pub addr: Option<String>,
+}
+
+#[tauri::command]
+pub async fn get_openbao_status(
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<OpenBaoStatus, CommandError> {
+    let addr = openbao::get_setting(&pool, "openbao_addr").await;
+    let token = openbao::get_setting(&pool, "openbao_token").await;
+    Ok(OpenBaoStatus {
+        configured: addr.is_some(),
+        has_token: token.is_some(),
+        addr,
+    })
+}
+
+#[tauri::command]
+pub async fn clear_openbao_token(
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<(), CommandError> {
+    openbao::remove_setting(&pool, "openbao_token").await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_setting(
+    key: String,
+    value: String,
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<(), CommandError> {
+    openbao::set_setting(&pool, &key, &value).await?;
+    Ok(())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
