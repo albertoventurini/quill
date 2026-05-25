@@ -275,15 +275,15 @@
   .panel {
     display: flex;
     flex-direction: column;
-    border-top: 1px solid #ccc;
+    border-top: 1px solid var(--border-primary);
     overflow: hidden;
   }
   .sub-tabs {
     display: flex;
     gap: 0;
     align-items: stretch;
-    border-bottom: 1px solid #ddd;
-    background: #f0f0f0;
+    border-bottom: 1px solid var(--border-light);
+    background: var(--bg-toolbar);
   }
   .sub-tab {
     padding: 0.35rem 0.6rem;
@@ -292,9 +292,13 @@
     cursor: pointer;
     font: inherit;
     font-size: 0.85rem;
-    color: #555;
+    color: var(--text-secondary);
   }
-  .sub-tab.active { background: white; border-bottom: 2px solid #3366cc; color: #111; }
+  .sub-tab.active {
+    background: var(--bg-surface);
+    border-bottom: 2px solid var(--text-accent);
+    color: var(--text-heading);
+  }
   .refresh {
     margin-left: auto;
     padding: 0.25rem 0.5rem;
@@ -302,27 +306,27 @@
     border: none;
     cursor: pointer;
     font-size: 0.95rem;
-    color: #555;
+    color: var(--text-secondary);
   }
-  .refresh:hover { color: #111; }
+  .refresh:hover { color: var(--text-heading); }
 
   .toolbar {
     display: flex;
     gap: 0.4rem;
     padding: 0.35rem 0.5rem;
-    border-bottom: 1px solid #eee;
-    background: #fafafa;
+    border-bottom: 1px solid var(--border-extra-light);
+    background: var(--bg-toolbar);
   }
   .chip {
     padding: 0.15rem 0.5rem;
-    border: 1px solid #bbb;
+    border: 1px solid var(--border-light);
     border-radius: 99px;
-    background: white;
+    background: var(--bg-surface);
     cursor: pointer;
     font-size: 0.75rem;
   }
-  .chip:hover { background: #f0f0f0; }
-  .chip.danger { border-color: #d88; color: #b00020; }
+  .chip:hover { background: var(--bg-toolbar); }
+  .chip.danger { border-color: #d88; color: var(--text-error); }
   .chip:disabled { opacity: 0.5; cursor: not-allowed; }
 
   .list {
@@ -344,11 +348,11 @@
     font-size: 0.8rem;
     font-variant-numeric: tabular-nums;
   }
-  .row:hover { background: #f3f3f7; }
-  .row.failed { color: #b00020; }
-  .row.failed .sql { color: #b00020; }
-  .ts { color: #666; min-width: 7em; }
-  .db { color: #06536b; min-width: 6em; }
+  .row:hover { background: var(--bg-row-hover); }
+  .row.failed { color: var(--text-error); }
+  .row.failed .sql { color: var(--text-error); }
+  .ts { color: var(--text-mid); min-width: 7em; }
+  .db { color: var(--text-db); min-width: 6em; }
   .sql {
     flex: 1;
     overflow: hidden;
@@ -356,7 +360,7 @@
     white-space: nowrap;
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   }
-  .duration { color: #888; min-width: 4em; text-align: right; }
+  .duration { color: var(--text-muted); min-width: 4em; text-align: right; }
 
   .row.saved { padding: 0.15rem 0.6rem; }
   .row-button {
@@ -380,28 +384,61 @@
     background: transparent;
     border: none;
     cursor: pointer;
-    color: #777;
+    color: var(--text-mid);
     padding: 0.15rem 0.3rem;
     font-size: 0.85rem;
   }
-  .icon-button:hover { color: #111; background: #eee; border-radius: 3px; }
+  .icon-button:hover {
+    color: var(--text-heading);
+    background: var(--border-extra-light);
+    border-radius: 3px;
+  }
 
   .rename-form { flex: 1; }
   .rename-input {
     width: 100%;
     padding: 0.2rem 0.35rem;
-    border: 1px solid #888;
+    border: 1px solid var(--text-muted);
     border-radius: 3px;
     font: inherit;
+    color: var(--text-primary);
   }
 
-  .muted { color: #888; font-style: italic; padding: 0.5rem 0.6rem; font-size: 0.85rem; }
+  .muted {
+    color: var(--text-muted);
+    font-style: italic;
+    padding: 0.5rem 0.6rem;
+    font-size: 0.85rem;
+  }
 
-  .modal { border: 1px solid #888; border-radius: 8px; padding: 1.25rem; max-width: 360px; }
-  .modal::backdrop { background: rgba(0,0,0,0.3); }
-  .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.75rem; }
-  .btn { padding: 0.3rem 0.6rem; border: 1px solid #888; border-radius: 4px; background: #f0f0f0; cursor: pointer; font: inherit; font-size: 0.9rem; }
-  .btn:hover { background: #e0e0e0; }
-  .btn-danger { background: #b00020; color: white; border-color: #8a0019; }
-  .btn-danger:hover { background: #8a0019; }
+  .modal {
+    border: 1px solid var(--text-muted);
+    border-radius: 8px;
+    padding: 1.25rem;
+    max-width: 360px;
+    background: var(--bg-surface);
+  }
+  .modal::backdrop { background: var(--modal-backdrop); }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+  .btn {
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--text-muted);
+    border-radius: 4px;
+    background: var(--btn-bg);
+    cursor: pointer;
+    font: inherit;
+    font-size: 0.9rem;
+  }
+  .btn:hover { background: var(--btn-hover); }
+  .btn-danger {
+    background: var(--btn-danger-bg);
+    color: var(--btn-danger-text);
+    border-color: var(--btn-danger-hover);
+  }
+  .btn-danger:hover { background: var(--btn-danger-hover); }
 </style>

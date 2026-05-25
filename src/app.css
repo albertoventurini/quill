@@ -1,0 +1,261 @@
+/*
+ * Quill design tokens.
+ *
+ * Default (:root) = light.  @media (prefers-color-scheme: dark) provides
+ * system-default dark.  [data-theme] attributes (set by theme.ts) override
+ * both, so explicit user preference always wins.
+ */
+
+:root {
+  /* Backgrounds */
+  --bg-app: #f0f0f0;
+  --bg-surface: white;
+  --bg-tertiary: #f7f7f7;
+  --bg-toolbar: #fafafa;
+  --bg-hover: #e8e8e8;
+  --bg-selected: #d0d0ff;
+  --bg-selected-cell: #e8f0fe;
+  --bg-accent-light: #e0e0ff;
+  --bg-row-hover: #f3f3f7;
+
+  /* Borders */
+  --border-primary: #ccc;
+  --border-secondary: #888;
+  --border-light: #ddd;
+  --border-input: #aaa;
+  --border-accent: #8888cc;
+  --border-extra-light: #eee;
+
+  /* Text */
+  --text-heading: #111;
+  --text-primary: #333;
+  --text-secondary: #555;
+  --text-mid: #666;
+  --text-muted: #888;
+  --text-faint: #999;
+  --text-accent: #3366cc;
+  --text-accent-dark: #2255aa;
+  --text-error: #b00020;
+  --text-warning: #b8860b;
+  --text-orange: #b14b00;
+  --text-db: #06536b;
+
+  /* Buttons */
+  --btn-bg: #f0f0f0;
+  --btn-hover: #e0e0e0;
+  --btn-border: #888;
+  --btn-primary-bg: #3366cc;
+  --btn-primary-hover: #2255aa;
+  --btn-primary-text: white;
+  --btn-primary-border: #2255aa;
+  --btn-danger-bg: #b00020;
+  --btn-danger-hover: #8a0019;
+  --btn-danger-text: white;
+  --btn-danger-border: #8a0019;
+
+  /* Misc */
+  --err-badge-bg: #b00020;
+  --err-badge-text: white;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --modal-backdrop: rgba(0, 0, 0, 0.3);
+  --resizer-hover: #3366cc44;
+  --close-hover-bg: #fde;
+  --empty-hint: #888;
+
+  /* CodeMirror */
+  --cm-bg: white;
+  --cm-border: #aaa;
+  --cm-focus-ring: #3366cc;
+  --cm-text: #333;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Backgrounds */
+    --bg-app: #1e1e1e;
+    --bg-surface: #252526;
+    --bg-tertiary: #2d2d2d;
+    --bg-toolbar: #1e1e1e;
+    --bg-hover: #3a3a3a;
+    --bg-selected: #264f78;
+    --bg-selected-cell: #1e3a5f;
+    --bg-accent-light: #2a2d3e;
+    --bg-row-hover: #2a2d35;
+
+    /* Borders */
+    --border-primary: #3c3c3c;
+    --border-secondary: #555;
+    --border-light: #444;
+    --border-input: #555;
+    --border-accent: #264f78;
+    --border-extra-light: #444;
+
+    /* Text */
+    --text-heading: #e0e0e0;
+    --text-primary: #cccccc;
+    --text-secondary: #999;
+    --text-mid: #888;
+    --text-muted: #6a6a6a;
+    --text-faint: #5a5a5a;
+    --text-accent: #007acc;
+    --text-accent-dark: #1a8ce0;
+    --text-error: #f44747;
+    --text-warning: #cca700;
+    --text-orange: #e06c00;
+    --text-db: #4fc1ff;
+
+    /* Buttons */
+    --btn-bg: #3a3a3a;
+    --btn-hover: #4a4a4a;
+    --btn-border: #555;
+    --btn-primary-bg: #0e639c;
+    --btn-primary-hover: #1177bb;
+    --btn-primary-text: white;
+    --btn-primary-border: #0e639c;
+    --btn-danger-bg: #a31515;
+    --btn-danger-hover: #c42020;
+    --btn-danger-text: white;
+    --btn-danger-border: #a31515;
+
+    /* Misc */
+    --err-badge-bg: #a31515;
+    --err-badge-text: white;
+    --shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+    --modal-backdrop: rgba(0, 0, 0, 0.5);
+    --resizer-hover: #0071b344;
+    --close-hover-bg: #3a1f1f;
+    --empty-hint: #6a6a6a;
+
+    /* CodeMirror */
+    --cm-bg: #1e1e1e;
+    --cm-border: #555;
+    --cm-focus-ring: #007acc;
+    --cm-text: #d4d4d4;
+  }
+}
+
+[data-theme="light"] {
+  /* Backgrounds */
+  --bg-app: #f0f0f0;
+  --bg-surface: white;
+  --bg-tertiary: #f7f7f7;
+  --bg-toolbar: #fafafa;
+  --bg-hover: #e8e8e8;
+  --bg-selected: #d0d0ff;
+  --bg-selected-cell: #e8f0fe;
+  --bg-accent-light: #e0e0ff;
+  --bg-row-hover: #f3f3f7;
+
+  /* Borders */
+  --border-primary: #ccc;
+  --border-secondary: #888;
+  --border-light: #ddd;
+  --border-input: #aaa;
+  --border-accent: #8888cc;
+  --border-extra-light: #eee;
+
+  /* Text */
+  --text-heading: #111;
+  --text-primary: #333;
+  --text-secondary: #555;
+  --text-mid: #666;
+  --text-muted: #888;
+  --text-faint: #999;
+  --text-accent: #3366cc;
+  --text-accent-dark: #2255aa;
+  --text-error: #b00020;
+  --text-warning: #b8860b;
+  --text-orange: #b14b00;
+  --text-db: #06536b;
+
+  /* Buttons */
+  --btn-bg: #f0f0f0;
+  --btn-hover: #e0e0e0;
+  --btn-border: #888;
+  --btn-primary-bg: #3366cc;
+  --btn-primary-hover: #2255aa;
+  --btn-primary-text: white;
+  --btn-primary-border: #2255aa;
+  --btn-danger-bg: #b00020;
+  --btn-danger-hover: #8a0019;
+  --btn-danger-text: white;
+  --btn-danger-border: #8a0019;
+
+  /* Misc */
+  --err-badge-bg: #b00020;
+  --err-badge-text: white;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  --modal-backdrop: rgba(0, 0, 0, 0.3);
+  --resizer-hover: #3366cc44;
+  --close-hover-bg: #fde;
+  --empty-hint: #888;
+
+  /* CodeMirror */
+  --cm-bg: white;
+  --cm-border: #aaa;
+  --cm-focus-ring: #3366cc;
+  --cm-text: #333;
+}
+
+[data-theme="dark"] {
+  /* Backgrounds */
+  --bg-app: #1e1e1e;
+  --bg-surface: #252526;
+  --bg-tertiary: #2d2d2d;
+  --bg-toolbar: #1e1e1e;
+  --bg-hover: #3a3a3a;
+  --bg-selected: #264f78;
+  --bg-selected-cell: #1e3a5f;
+  --bg-accent-light: #2a2d3e;
+  --bg-row-hover: #2a2d35;
+
+  /* Borders */
+  --border-primary: #3c3c3c;
+  --border-secondary: #555;
+  --border-light: #444;
+  --border-input: #555;
+  --border-accent: #264f78;
+  --border-extra-light: #444;
+
+  /* Text */
+  --text-heading: #e0e0e0;
+  --text-primary: #cccccc;
+  --text-secondary: #999;
+  --text-mid: #888;
+  --text-muted: #6a6a6a;
+  --text-faint: #5a5a5a;
+  --text-accent: #007acc;
+  --text-accent-dark: #1a8ce0;
+  --text-error: #f44747;
+  --text-warning: #cca700;
+  --text-orange: #e06c00;
+  --text-db: #4fc1ff;
+
+  /* Buttons */
+  --btn-bg: #3a3a3a;
+  --btn-hover: #4a4a4a;
+  --btn-border: #555;
+  --btn-primary-bg: #0e639c;
+  --btn-primary-hover: #1177bb;
+  --btn-primary-text: white;
+  --btn-primary-border: #0e639c;
+  --btn-danger-bg: #a31515;
+  --btn-danger-hover: #c42020;
+  --btn-danger-text: white;
+  --btn-danger-border: #a31515;
+
+  /* Misc */
+  --err-badge-bg: #a31515;
+  --err-badge-text: white;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --modal-backdrop: rgba(0, 0, 0, 0.5);
+  --resizer-hover: #0071b344;
+  --close-hover-bg: #3a1f1f;
+  --empty-hint: #6a6a6a;
+
+  /* CodeMirror */
+  --cm-bg: #1e1e1e;
+  --cm-border: #555;
+  --cm-focus-ring: #007acc;
+  --cm-text: #d4d4d4;
+}

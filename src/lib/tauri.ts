@@ -178,14 +178,6 @@ export type NewSavedQuery = {
   sql: string;
 };
 
-// ── OpenBao status (mirrors commands::OpenBaoStatus) ──
-
-export type OpenBaoStatus = {
-  configured: boolean;
-  has_token: boolean;
-  addr: string | null;
-};
-
 // ── Error type (mirrors commands::CommandError serde tagging) ──
 
 export type CommandError = {
@@ -290,14 +282,17 @@ export const api = {
   loginOpenBao: () =>
     invoke<string>("login_openbao"),
 
-  getOpenBaoStatus: () =>
-    invoke<OpenBaoStatus>("get_openbao_status"),
-
   clearOpenBaoToken: () =>
     invoke<void>("clear_openbao_token"),
 
   setSetting: (key: string, value: string) =>
     invoke<void>("set_setting", { key, value }),
+
+  getSetting: (key: string) =>
+    invoke<string | null>("get_setting", { key }),
+
+  getAllSettings: () =>
+    invoke<Record<string, string>>("get_all_settings"),
 
   refreshOpenBaoCreds: (id: number) =>
     invoke<SlotState>("refresh_openbao_creds", { id }),

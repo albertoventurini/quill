@@ -87,8 +87,8 @@
   .tab-strip {
     display: flex;
     gap: 0;
-    border-bottom: 1px solid #ccc;
-    background: #f7f7f7;
+    border-bottom: 1px solid var(--border-primary);
+    background: var(--bg-tertiary);
     align-items: stretch;
     overflow-x: auto;
   }
@@ -97,20 +97,20 @@
     align-items: center;
     gap: 0.25rem;
     padding: 0.35rem 0.6rem;
-    border-right: 1px solid #ddd;
+    border-right: 1px solid var(--border-light);
     cursor: pointer;
     font-size: 0.85rem;
     user-select: none;
     white-space: nowrap;
   }
-  .tab:hover { background: #efefef; }
-  .tab.active { background: white; border-bottom: 2px solid #3366cc; }
-  .server { color: #333; font-weight: 500; }
-  .sep { color: #aaa; }
+  .tab:hover { background: var(--bg-hover); }
+  .tab.active { background: var(--bg-surface); border-bottom: 2px solid var(--text-accent); }
+  .server { color: var(--text-primary); font-weight: 500; }
+  .sep { color: var(--text-faint); }
   /* Muted = the tab matches the tree's current selection. */
-  .tab.muted .server, .tab.muted .db { color: #888; }
-  .tab:not(.muted) .db { color: #b14b00; font-weight: 600; }
-  .dirty { color: #b14b00; padding-left: 0.15rem; }
+  .tab.muted .server, .tab.muted .db { color: var(--text-muted); }
+  .tab:not(.muted) .db { color: var(--text-orange); font-weight: 600; }
+  .dirty { color: var(--text-orange); padding-left: 0.15rem; }
   .close {
     margin-left: 0.4rem;
     background: transparent;
@@ -119,16 +119,16 @@
     font-size: 1rem;
     line-height: 1;
     padding: 0 0.25rem;
-    color: #888;
+    color: var(--text-muted);
   }
-  .close:hover { color: #b00020; background: #fde; border-radius: 2px; }
+  .close:hover { color: var(--text-error); background: var(--close-hover-bg); border-radius: 2px; }
   .add {
     padding: 0.35rem 0.6rem;
     background: transparent;
     border: none;
     cursor: pointer;
     font-size: 1rem;
-    color: #666;
+    color: var(--text-mid);
   }
-  .add:hover { background: #efefef; color: #333; }
+  .add:hover { background: var(--bg-hover); color: var(--text-primary); }
 </style>

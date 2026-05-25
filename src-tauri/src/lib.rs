@@ -52,9 +52,10 @@ pub fn run() {
             commands::rename_saved,
             commands::write_text_file,
             commands::login_openbao,
-            commands::get_openbao_status,
             commands::clear_openbao_token,
             commands::set_setting,
+            commands::get_setting,
+            commands::get_all_settings,
             commands::refresh_openbao_creds,
         ])
         .run(tauri::generate_context!())

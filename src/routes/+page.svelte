@@ -21,7 +21,8 @@ import SidePanel from "$lib/SidePanel.svelte";
 import SaveDialog from "$lib/SaveDialog.svelte";
 import Resizer from "$lib/Resizer.svelte";
 import { save } from "@tauri-apps/plugin-dialog";
-import { encodeCsv } from "$lib/csv";
+  import { encodeCsv } from "$lib/csv";
+  import { storedTheme, setTheme, type Theme } from "$lib/theme.svelte";
 
   // ═════════════════ State ═════════════════
 
@@ -265,9 +266,9 @@ import { encodeCsv } from "$lib/csv";
 
   async function refreshOpenBaoStatus() {
     try {
-      const status = await api.getOpenBaoStatus();
-      baoAddr = status.addr ?? "";
-      baoHasToken = status.has_token;
+      const settings = await api.getAllSettings();
+      baoAddr = settings["openbao_addr"] ?? "";
+      baoHasToken = "openbao_token" in settings;
       baoStatusError = "";
     } catch (err) {
       baoStatusError = errorMessage(err);
@@ -1014,6 +1015,22 @@ import { encodeCsv } from "$lib/csv";
 <dialog bind:this={settingsDialog} class="modal">
   <h2>Settings</h2>
   <div class="add-form">
+    <h3>Theme</h3>
+    <div class="theme-options">
+      <label class="theme-option">
+        <input type="radio" name="theme" value="light" checked={storedTheme === "light"} onchange={() => setTheme("light")} />
+        Light
+      </label>
+      <label class="theme-option">
+        <input type="radio" name="theme" value="dark" checked={storedTheme === "dark"} onchange={() => setTheme("dark")} />
+        Dark
+      </label>
+      <label class="theme-option">
+        <input type="radio" name="theme" value="system" checked={storedTheme === "system"} onchange={() => setTheme("system")} />
+        System
+      </label>
+    </div>
+
     <h3>OpenBao</h3>
     <label class="field">
       Server address
@@ -1072,9 +1089,9 @@ import { encodeCsv } from "$lib/csv";
 </dialog>
 
 <style>
-  :global(html), :global(body) { margin: 0; padding: 0; overflow: hidden; }
-  .shell { display: flex; flex-direction: row; height: 100vh; overflow: hidden; }
-  .left-pane { border-right: 1px solid #ccc; padding: 0.75rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
+  :global(html), :global(body) { margin: 0; padding: 0; overflow: hidden; background: var(--bg-app); color: var(--text-primary); }
+  .shell { display: flex; flex-direction: row; height: 100vh; overflow: hidden; background: var(--bg-app); }
+  .left-pane { border-right: 1px solid var(--border-primary); padding: 0.75rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.5rem; }
   .right-pane { flex: 1; min-width: 0; min-height: 0; padding: 1rem; overflow: hidden; display: flex; flex-direction: column; gap: 0.5rem; }
 
   .header-row { display: flex; align-items: center; justify-content: space-between; }
@@ -1083,51 +1100,64 @@ import { encodeCsv } from "$lib/csv";
   .tree { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
   .server-block { display: flex; flex-direction: column; }
   .server-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
-  .slot-badge { font-size: 0.8rem; color: #666; font-variant-numeric: tabular-nums; padding-right: 0.3rem; }
+  .slot-badge { font-size: 0.8rem; color: var(--text-mid); font-variant-numeric: tabular-nums; padding-right: 0.3rem; }
   .expiry { font-size: 0.75rem; margin-left: 0.4rem; }
-  .expiry-warn { color: #b8860b; }
-  .expiry-critical { color: #b00020; font-weight: bold; }
+  .expiry-warn { color: var(--text-warning); }
+  .expiry-critical { color: var(--text-error); font-weight: bold; }
 
-  .btn { padding: 0.3rem 0.6rem; border: 1px solid #888; border-radius: 4px; background: #f0f0f0; cursor: pointer; font: inherit; font-size: 0.9rem; }
-  .btn:hover { background: #e0e0e0; }
+  .btn { padding: 0.3rem 0.6rem; border: 1px solid var(--btn-border); border-radius: 4px; background: var(--btn-bg); cursor: pointer; font: inherit; font-size: 0.9rem; }
+  .btn:hover { background: var(--btn-hover); }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn-primary { background: #3366cc; color: white; border-color: #2255aa; }
-  .btn-primary:hover { background: #2255aa; }
+  .btn-primary { background: var(--btn-primary-bg); color: var(--btn-primary-text); border-color: var(--btn-primary-border); }
+  .btn-primary:hover { background: var(--btn-primary-hover); }
 
-  .input { padding: 0.35rem; border: 1px solid #aaa; border-radius: 4px; font: inherit; box-sizing: border-box; }
+  .input { padding: 0.35rem; border: 1px solid var(--border-input); border-radius: 4px; font: inherit; box-sizing: border-box; background: var(--bg-surface); color: var(--text-primary); }
 
   .action-row { display: flex; gap: 0.5rem; align-items: center; }
   .inline { margin: 0.25rem 0; }
-  .inline.error { color: #b00020; font-size: 0.9rem; }
+  .inline.error { color: var(--text-error); font-size: 0.9rem; }
   .err-badge {
     display: inline-block;
     padding: 0 0.35rem;
     margin-right: 0.4rem;
     border-radius: 3px;
-    background: #b00020;
-    color: white;
+    background: var(--err-badge-bg);
+    color: var(--err-badge-text);
     font-size: 0.75rem;
     text-transform: uppercase;
   }
-  .error { color: #cc0000; }
+  .error { color: var(--text-error); }
 
-  .modal { border: 1px solid #888; border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; }
-  .modal::backdrop { background: rgba(0,0,0,0.3); }
+  .modal { border: 1px solid var(--border-secondary); border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; background: var(--bg-surface); }
+  .modal::backdrop { background: var(--modal-backdrop); }
   .add-form { display: flex; flex-direction: column; gap: 0.5rem; }
   .field { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.9rem; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
 
-  .muted { color: #888; font-style: italic; }
+  .muted { color: var(--text-muted); font-style: italic; }
+
+  .theme-options {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    font-size: 0.9rem;
+  }
+  .theme-option {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    cursor: pointer;
+  }
 
   .context-menu {
     position: fixed;
     list-style: none;
     margin: 0;
     padding: 0.25rem 0;
-    background: white;
-    border: 1px solid #888;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-secondary);
     border-radius: 4px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    box-shadow: var(--shadow);
     min-width: 180px;
     z-index: 100;
   }
@@ -1142,5 +1172,5 @@ import { encodeCsv } from "$lib/csv";
     font: inherit;
     font-size: 0.9rem;
   }
-  .menu-item:hover { background: #e0e0ff; }
+  .menu-item:hover { background: var(--bg-accent-light); }
 </style>

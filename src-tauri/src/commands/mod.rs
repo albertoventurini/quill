@@ -493,24 +493,19 @@ pub async fn login_openbao(
     Ok("Login successful.".into())
 }
 
-#[derive(Debug, Serialize)]
-pub struct OpenBaoStatus {
-    pub configured: bool,
-    pub has_token: bool,
-    pub addr: Option<String>,
+#[tauri::command]
+pub async fn get_all_settings(
+    pool: State<'_, sqlx::SqlitePool>,
+) -> Result<std::collections::HashMap<String, String>, CommandError> {
+    Ok(openbao::get_all_settings(&pool).await?)
 }
 
 #[tauri::command]
-pub async fn get_openbao_status(
+pub async fn get_setting(
+    key: String,
     pool: State<'_, sqlx::SqlitePool>,
-) -> Result<OpenBaoStatus, CommandError> {
-    let addr = openbao::get_setting(&pool, "openbao_addr").await;
-    let token = openbao::get_setting(&pool, "openbao_token").await;
-    Ok(OpenBaoStatus {
-        configured: addr.is_some(),
-        has_token: token.is_some(),
-        addr,
-    })
+) -> Result<Option<String>, CommandError> {
+    Ok(openbao::get_setting(&pool, &key).await)
 }
 
 #[tauri::command]

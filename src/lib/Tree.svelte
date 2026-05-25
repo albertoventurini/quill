@@ -156,6 +156,7 @@
   .tree-node {
     display: flex;
     flex-direction: column;
+    color: var(--text-primary);
   }
   .tree-row {
     display: block;
@@ -176,33 +177,33 @@
     cursor: pointer;
   }
   .row-button:hover {
-    background: #e8e8e8;
+    background: var(--bg-hover);
   }
   .row-button.selected {
-    background: #d0d0ff;
-    border-color: #8888cc;
+    background: var(--bg-selected);
+    border-color: var(--border-accent);
   }
   .arrow {
     font-family: monospace;
     width: 0.9rem;
     text-align: center;
-    color: #666;
+    color: var(--text-mid);
     font-size: 0.85rem;
   }
   .label { flex: 1; }
-  .loading { color: #888; font-style: italic; }
-  .error { color: #cc0000; font-weight: bold; cursor: help; }
+  .loading { color: var(--text-muted); font-style: italic; }
+  .error { color: var(--text-error); font-weight: bold; cursor: help; }
   .empty-hint {
     display: block;
     font-size: 0.8rem;
-    color: #888;
+    color: var(--text-muted);
     font-style: italic;
     padding: 0.15rem 0.3rem;
     user-select: none;
   }
   .children {
     padding-left: 1.2rem;
-    border-left: 1px solid #e0e0e0;
+    border-left: 1px solid var(--border-light);
     margin-left: 0.4rem;
   }
 </style>

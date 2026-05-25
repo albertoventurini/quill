@@ -95,17 +95,17 @@
 </dialog>
 
 <style>
-  .modal { border: 1px solid #888; border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; }
-  .modal::backdrop { background: rgba(0,0,0,0.3); }
+  .modal { border: 1px solid var(--border-secondary); border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; background: var(--bg-surface); }
+  .modal::backdrop { background: var(--modal-backdrop); }
   .save-form { display: flex; flex-direction: column; gap: 0.75rem; }
   .field { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.9rem; }
-  .input { padding: 0.35rem; border: 1px solid #aaa; border-radius: 4px; font: inherit; }
-  .scope { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; border: 1px solid #ddd; padding: 0.5rem; border-radius: 4px; }
-  .scope legend { padding: 0 0.25rem; color: #555; }
+  .input { padding: 0.35rem; border: 1px solid var(--border-input); border-radius: 4px; font: inherit; color: var(--text-primary); }
+  .scope { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; border: 1px solid var(--border-light); padding: 0.5rem; border-radius: 4px; }
+  .scope legend { padding: 0 0.25rem; color: var(--text-secondary); }
   .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
-  .btn { padding: 0.3rem 0.6rem; border: 1px solid #888; border-radius: 4px; background: #f0f0f0; cursor: pointer; font: inherit; font-size: 0.9rem; }
-  .btn:hover { background: #e0e0e0; }
-  .btn-primary { background: #3366cc; color: white; border-color: #2255aa; }
-  .btn-primary:hover { background: #2255aa; }
-  .error { color: #b00020; font-size: 0.85rem; margin: 0; }
+  .btn { padding: 0.3rem 0.6rem; border: 1px solid var(--border-secondary); border-radius: 4px; background: var(--btn-bg); cursor: pointer; font: inherit; font-size: 0.9rem; }
+  .btn:hover { background: var(--btn-hover); }
+  .btn-primary { background: var(--btn-primary-bg); color: var(--btn-primary-text); border-color: var(--btn-primary-border); }
+  .btn-primary:hover { background: var(--btn-primary-hover); }
+  .error { color: var(--text-error); font-size: 0.85rem; margin: 0; }
 </style>

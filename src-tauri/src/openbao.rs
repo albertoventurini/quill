@@ -101,6 +101,15 @@ pub async fn get_setting(pool: &SqlitePool, key: &str) -> Option<String> {
         .flatten()
 }
 
+pub async fn get_all_settings(
+    pool: &SqlitePool,
+) -> Result<std::collections::HashMap<String, String>, OpenBaoError> {
+    let rows = sqlx::query_as::<_, (String, String)>("SELECT key, value FROM settings")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.into_iter().collect())
+}
+
 pub async fn remove_setting(pool: &SqlitePool, key: &str) -> Result<(), OpenBaoError> {
     sqlx::query("DELETE FROM settings WHERE key = ?")
         .bind(key)

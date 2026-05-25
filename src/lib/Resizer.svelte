@@ -48,7 +48,7 @@
   }
   .resizer:hover,
   .resizer:active {
-    background: #3366cc44;
+    background: var(--resizer-hover);
   }
   .horizontal {
     width: 5px;
