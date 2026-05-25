@@ -371,6 +371,7 @@ pub async fn run_query(
     server_id: i64,
     database: String,
     sql: String,
+    schema: Option<String>,
     chunk_size: Option<usize>,
     pool: State<'_, sqlx::SqlitePool>,
     registry: State<'_, ServerRegistry>,
@@ -387,7 +388,16 @@ pub async fn run_query(
 
     let start = std::time::Instant::now();
 
-    let outcome = query::run_query(server_id, &database, &sql, chunk, slot_manager, &results).await;
+    let outcome = query::run_query(
+        server_id,
+        &database,
+        &sql,
+        schema.as_deref(),
+        chunk,
+        slot_manager,
+        &results,
+    )
+    .await;
 
     let (record, response) = match outcome {
         Ok(run) => {

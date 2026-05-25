@@ -221,9 +221,10 @@ export const api = {
     serverId: number,
     database: string,
     sql: string,
+    schema: string | null = null,
     chunkSize: number | null = null,
   ) =>
-    invoke<RunResult>("run_query", { serverId, database, sql, chunkSize }),
+    invoke<RunResult>("run_query", { serverId, database, sql, schema, chunkSize }),
 
   fetchMore: (resultId: string, chunkSize: number | null = null) =>
     invoke<ChunkResult>("fetch_more", { resultId, chunkSize }),

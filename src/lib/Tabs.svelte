@@ -72,6 +72,7 @@
       <span class="server">{serverNameLookup(t.serverId)}</span>
       <span class="sep">/</span>
       <span class="db">{t.database}</span>
+      {#if t.schema}<span class="sep">.</span><span class="schema" title="search_path scoped to {t.schema}">{t.schema}</span>{/if}
       {#if dirty(t)}<span class="dirty" aria-label="unsaved">•</span>{/if}
       <button
         class="close"
@@ -107,6 +108,7 @@
   .tab.active { background: var(--bg-surface); border-bottom: 2px solid var(--text-accent); }
   .server { color: var(--text-primary); font-weight: 500; }
   .sep { color: var(--text-faint); }
+  .schema { color: var(--text-accent); font-weight: 500; }
   /* Muted = the tab matches the tree's current selection. */
   .tab.muted .server, .tab.muted .db { color: var(--text-muted); }
   .tab:not(.muted) .db { color: var(--text-orange); font-weight: 600; }

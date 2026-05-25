@@ -406,12 +406,24 @@ import { save } from "@tauri-apps/plugin-dialog";
 
   // ═════════════════ Selection ═════════════════
 
-  async function selectDb(serverId: number, database: string) {
+  // Clicking a tree node only moves the selection cursor (side-panel scope,
+  // tab "matches" styling, and the target for the "+" / "New query" actions).
+  // It never opens an editor — that is an explicit context-menu action.
+  function selectDb(serverId: number, database: string) {
     selectedDb = { serverId, database };
-    // If there are no tabs yet, open the first one targeting this DB.
-    if (tabs.length === 0) {
-      addTab();
+  }
+
+  /** Open a fresh editor tab targeting `(serverId, database)`, optionally
+   *  scoped to `schema`.  Invoked by the tree context menu. */
+  function openQueryEditor(serverId: number, database: string, schema: string | null) {
+    if (!connections.some((c) => c.id === serverId)) {
+      sidePanelError = "This connection has been deleted.";
+      return;
     }
+    selectedDb = { serverId, database };
+    const tab = makeTab(serverId, database, "", schema);
+    tabs.push(tab);
+    activeTabId = tab.id;
   }
 
   let selectedConn = $derived(
@@ -436,6 +448,13 @@ import { save } from "@tauri-apps/plugin-dialog";
     closeMenu();
 
     switch (action) {
+      case "open-query":
+        if (target.kind === "database") {
+          openQueryEditor(target.serverId, target.name, null);
+        } else if (target.kind === "schema") {
+          openQueryEditor(target.serverId, target.database, target.name);
+        }
+        break;
       case "connect":
         if (target.kind === "server") connectServer(target.conn.id);
         break;
@@ -491,9 +510,18 @@ import { save } from "@tauri-apps/plugin-dialog";
         items.push({ action: "delete", label: "Delete connection" });
       }
     } else if (t.kind === "database") {
+      if (isConnected(t.serverId)) {
+        items.push({ action: "open-query", label: "New query" });
+      }
       items.push({ action: "refresh", label: "Refresh schema" });
       items.push({ action: "copy-name", label: "Copy name" });
-    } else if (t.kind === "schema" || t.kind === "leaf") {
+    } else if (t.kind === "schema") {
+      if (isConnected(t.serverId)) {
+        items.push({ action: "open-query", label: "New query scoped to this schema" });
+      }
+      items.push({ action: "refresh", label: "Refresh schema" });
+      items.push({ action: "copy-name", label: "Copy qualified name" });
+    } else if (t.kind === "leaf") {
       items.push({ action: "refresh", label: "Refresh schema" });
       items.push({ action: "copy-name", label: "Copy qualified name" });
     } else if (t.kind === "column") {
@@ -648,7 +676,7 @@ import { save } from "@tauri-apps/plugin-dialog";
     tab.runningQuery = true;
     tab.lastError = null;
     try {
-      const r: RunResult = await api.runQuery(tab.serverId, tab.database, payload.text);
+      const r: RunResult = await api.runQuery(tab.serverId, tab.database, payload.text, tab.schema);
       tab.active = {
         resultId: r.result_id,
         columns: r.columns,
@@ -842,12 +870,12 @@ import { save } from "@tauri-apps/plugin-dialog";
 
   <!-- ═══════ RIGHT PANE ═══════ -->
   <main class="right-pane">
-    {#if selectedDb}
+    {#if tabs.length > 0}
       <Tabs
         {tabs}
         activeId={activeTabId}
-        treeServerId={selectedDb.serverId}
-        treeDatabase={selectedDb.database}
+        treeServerId={selectedDb?.serverId ?? null}
+        treeDatabase={selectedDb?.database ?? null}
         serverNameLookup={(id) => connections.find((c) => c.id === id)?.name ?? "?"}
         onSelect={selectTab}
         onClose={closeTab}
@@ -865,7 +893,7 @@ import { save } from "@tauri-apps/plugin-dialog";
           initial={tab.sql}
           onChange={(doc) => { tab.sql = doc; }}
           onRun={(payload) => runFromEditor(payload)}
-          getContext={() => ({ serverId: tab.serverId, database: tab.database })}
+          getContext={() => ({ serverId: tab.serverId, database: tab.database, schema: tab.schema })}
         />
       {/key}
 
@@ -922,7 +950,7 @@ import { save } from "@tauri-apps/plugin-dialog";
         onError={(msg) => (sidePanelError = msg)}
       />
     {:else}
-      <p class="muted">Connect to a server and select a database in the tree (left) to get started.</p>
+      <p class="muted">Right-click a database (or a schema, to scope it) in the tree → “New query” to open an editor.</p>
     {/if}
   </main>
 </div>

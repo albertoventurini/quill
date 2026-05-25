@@ -16,7 +16,17 @@ import type { CompletionContext, CompletionResult, Completion } from "@codemirro
 import { api, type SchemaPayload, type CompletionKind, type ScopeTable } from "./tauri";
 import { getSchemaPayload } from "./schemaStore";
 
-export type EditorContext = { serverId: number; database: string } | null;
+export type EditorContext =
+  | {
+      serverId: number;
+      database: string;
+      /** When set, the tab is scoped to one schema (matching the runtime
+       *  `SET search_path TO "<schema>"`). Autocomplete then resolves
+       *  unqualified relations/columns in this schema only, instead of the
+       *  database's introspected search_path. */
+      schema: string | null;
+    }
+  | null;
 
 /** Build a CodeMirror completion source bound to a context getter. */
 export function makeCompletionSource(getContext: () => EditorContext) {
@@ -48,7 +58,11 @@ export function makeCompletionSource(getContext: () => EditorContext) {
 
     if (analysis.kind === "none") return null;
 
-    const options = buildOptions(analysis, payload);
+    // A schema-scoped tab overrides the introspected search_path so
+    // unqualified suggestions match what the query will actually resolve.
+    const searchPath = editorCtx.schema ? [editorCtx.schema] : payload.search_path;
+
+    const options = buildOptions(analysis, payload, searchPath);
     if (options.length === 0) return null;
 
     return {
@@ -79,6 +93,7 @@ function buildOptions(
     scope_tables: ScopeTable[];
   },
   payload: SchemaPayload,
+  searchPath: string[],
 ): Completion[] {
   const prefix = analysis.prefix.toLowerCase();
 
@@ -86,7 +101,7 @@ function buildOptions(
     case "from_item":
       return [
         ...schemaCompletions(payload, prefix),
-        ...tablesInSearchPath(payload, prefix),
+        ...tablesInSearchPath(payload, searchPath, prefix),
         ...keywordCompletions(prefix),
       ];
 
@@ -104,12 +119,13 @@ function buildOptions(
         analysis.scope_tables,
         qualifier,
         prefix,
+        searchPath,
       );
     }
 
     case "unqualified":
       return [
-        ...unqualifiedColumns(payload, analysis.scope_tables, prefix),
+        ...unqualifiedColumns(payload, analysis.scope_tables, prefix, searchPath),
         ...keywordCompletions(prefix),
       ];
 
@@ -130,9 +146,13 @@ function schemaCompletions(payload: SchemaPayload, prefix: string): Completion[]
     }));
 }
 
-function tablesInSearchPath(payload: SchemaPayload, prefix: string): Completion[] {
+function tablesInSearchPath(
+  payload: SchemaPayload,
+  searchPath: string[],
+  prefix: string,
+): Completion[] {
   const out: Completion[] = [];
-  for (const schemaName of payload.search_path) {
+  for (const schemaName of searchPath) {
     const schema = payload.schemas.find((s) => s.name === schemaName);
     if (!schema) continue;
     for (const rel of schema.relations) {
@@ -173,6 +193,7 @@ function columnsForQualifier(
   scope: ScopeTable[],
   qualifier: string,
   prefix: string,
+  searchPath: string[],
 ): Completion[] {
   // Find the scope_table whose alias OR name matches the qualifier.
   const q = qualifier.toLowerCase();
@@ -184,7 +205,7 @@ function columnsForQualifier(
   // Resolve the actual relation via schema (if any) then name.
   const schemaCandidates = match.schema
     ? payload.schemas.filter((s) => s.name === match.schema)
-    : payload.schemas.filter((s) => payload.search_path.includes(s.name));
+    : payload.schemas.filter((s) => searchPath.includes(s.name));
 
   for (const schema of schemaCandidates) {
     const rel = schema.relations.find(
@@ -207,13 +228,14 @@ function unqualifiedColumns(
   payload: SchemaPayload,
   scope: ScopeTable[],
   prefix: string,
+  searchPath: string[],
 ): Completion[] {
   const out: Completion[] = [];
   // Collect columns of every scope table; tag by source table for `detail`.
   for (const t of scope) {
     const schemaCandidates = t.schema
       ? payload.schemas.filter((s) => s.name === t.schema)
-      : payload.schemas.filter((s) => payload.search_path.includes(s.name));
+      : payload.schemas.filter((s) => searchPath.includes(s.name));
     for (const schema of schemaCandidates) {
       const rel = schema.relations.find(
         (r) => r.name.toLowerCase() === t.name.toLowerCase(),

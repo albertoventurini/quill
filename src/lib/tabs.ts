@@ -25,6 +25,11 @@ export type Tab = {
   serverId: number;
   database: string;
 
+  /** When set, the tab was opened against a schema node; every run sends
+   *  `SET LOCAL search_path TO "<schema>"` so unqualified names resolve in
+   *  this schema only.  `null` = no scoping (database-level editor). */
+  schema: string | null;
+
   /** Current editor buffer.  `<Editor>` is the source of truth while
    *  mounted; this is the value persisted across un-/re-mount. */
   sql: string;
@@ -59,12 +64,14 @@ export function makeTab(
   serverId: number,
   database: string,
   sql: string = "",
+  schema: string | null = null,
 ): Tab {
   const id = nextId++;
   return {
     id,
     serverId,
     database,
+    schema,
     sql,
     initialSql: sql,
     active: null,

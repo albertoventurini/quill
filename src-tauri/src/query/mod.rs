@@ -100,11 +100,19 @@ fn is_bare_select(sql: &str) -> bool {
     bare.eq_ignore_ascii_case("SELECT")
 }
 
+/// Wrap an identifier in double quotes, doubling any internal quote so a
+/// schema name with odd characters can't break out of the `SET search_path`
+/// statement.
+fn quote_ident(ident: &str) -> String {
+    format!("\"{}\"", ident.replace('"', "\"\""))
+}
+
 /// Open a cursor and return the first chunk.
 pub async fn run_query(
     server_id: i64,
     database: &str,
     sql: &str,
+    schema: Option<&str>,
     chunk_size: usize,
     slot_manager: Arc<SlotManager<PgConnector>>,
     results: &ResultRegistry,
@@ -121,6 +129,17 @@ pub async fn run_query(
 
     let start = Instant::now();
     guard.batch_execute("BEGIN").await?;
+
+    // Scope unqualified names to a single schema when the editor was opened
+    // against a schema node. `SET LOCAL` is confined to this transaction, so
+    // it never leaks onto the next query that reuses the slot.
+    if let Some(schema) = schema {
+        let set_sql = format!(r#"SET LOCAL search_path TO {}"#, quote_ident(schema));
+        if let Err(e) = guard.batch_execute(&set_sql).await {
+            let _ = guard.batch_execute("ROLLBACK").await;
+            return Err(QueryError::Pg(e.to_string()));
+        }
+    }
 
     // Declare the cursor — interpolate the cursor name (we control it) and
     // the user SQL (we don't; pass it verbatim and trust Postgres parsing).
@@ -292,6 +311,13 @@ mod tests {
         assert!(is_bare_select("select"));
         assert!(is_bare_select("SELECT;"));
         assert!(is_bare_select("SELECT ;;;"));
+    }
+
+    #[test]
+    fn quote_ident_escapes_embedded_quotes() {
+        assert_eq!(quote_ident("public"), r#""public""#);
+        assert_eq!(quote_ident("my.schema"), r#""my.schema""#);
+        assert_eq!(quote_ident(r#"we"ird"#), r#""we""ird""#);
     }
 
     #[test]
