@@ -226,11 +226,12 @@
   .arrow {
     font-family: monospace;
     width: 0.9rem;
+    flex: 0 0 auto;
     text-align: center;
     color: var(--text-mid);
     font-size: 0.85rem;
   }
-  .label { flex: 1; }
+  .label { flex: 1; min-width: 0; }
   .label.col-name { flex: 0 1 auto; }
   .coltype {
     font-size: 0.8rem;
