@@ -23,7 +23,7 @@
 
   import { statementAtCursor } from "./statement";
   import { makeCompletionSource, type EditorContext } from "./completion";
-  import { effectiveTheme } from "./theme.svelte";
+  import { getEffectiveTheme } from "./theme.svelte";
 
   let {
     initial = "SELECT 1",
@@ -90,7 +90,7 @@
   ]);
 
   function currentHighlight() {
-    return effectiveTheme === "dark" ? darkHighlightStyle : defaultHighlightStyle;
+    return getEffectiveTheme() === "dark" ? darkHighlightStyle : defaultHighlightStyle;
   }
 
   // Public-ish imperative methods. The parent gets a reference via bind:this.

@@ -22,7 +22,7 @@ import SaveDialog from "$lib/SaveDialog.svelte";
 import Resizer from "$lib/Resizer.svelte";
 import { save } from "@tauri-apps/plugin-dialog";
   import { encodeCsv } from "$lib/csv";
-  import { storedTheme, setTheme, type Theme } from "$lib/theme.svelte";
+  import { getStoredTheme, setTheme, type Theme } from "$lib/theme.svelte";
 
   // ═════════════════ State ═════════════════
 
@@ -1018,15 +1018,15 @@ import { save } from "@tauri-apps/plugin-dialog";
     <h3>Theme</h3>
     <div class="theme-options">
       <label class="theme-option">
-        <input type="radio" name="theme" value="light" checked={storedTheme === "light"} onchange={() => setTheme("light")} />
+        <input type="radio" name="theme" value="light" checked={getStoredTheme() === "light"} onchange={() => setTheme("light")} />
         Light
       </label>
       <label class="theme-option">
-        <input type="radio" name="theme" value="dark" checked={storedTheme === "dark"} onchange={() => setTheme("dark")} />
+        <input type="radio" name="theme" value="dark" checked={getStoredTheme() === "dark"} onchange={() => setTheme("dark")} />
         Dark
       </label>
       <label class="theme-option">
-        <input type="radio" name="theme" value="system" checked={storedTheme === "system"} onchange={() => setTheme("system")} />
+        <input type="radio" name="theme" value="system" checked={getStoredTheme() === "system"} onchange={() => setTheme("system")} />
         System
       </label>
     </div>
