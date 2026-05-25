@@ -47,6 +47,13 @@ import { encodeCsv } from "$lib/csv";
 
   let editingId = $state<number | null>(null);
 
+  // Settings dialog
+  let settingsDialog = $state<HTMLDialogElement | null>(null);
+  let baoAddr = $state("");
+  let baoHasToken = $state(false);
+  let baoStatusError = $state("");
+  let baoLoginBusy = $state(false);
+
   // Context menu (new).
   let menu = $state<{
     x: number;
@@ -246,6 +253,87 @@ import { encodeCsv } from "$lib/csv";
     if (selectedDb?.serverId === id) selectedDb = null;
   }
 
+  // ═════════════════ OpenBao Settings ═════════════════
+
+  async function refreshOpenBaoStatus() {
+    try {
+      const status = await api.getOpenBaoStatus();
+      baoAddr = status.addr ?? "";
+      baoHasToken = status.has_token;
+      baoStatusError = "";
+    } catch (err) {
+      baoStatusError = errorMessage(err);
+    }
+  }
+
+  async function saveBaoAddr() {
+    baoStatusError = "";
+    try {
+      await api.setSetting("openbao_addr", baoAddr);
+      await refreshOpenBaoStatus();
+    } catch (err) {
+      baoStatusError = errorMessage(err);
+    }
+  }
+
+  async function loginOpenBao() {
+    baoStatusError = "";
+    baoLoginBusy = true;
+    try {
+      const msg = await api.loginOpenBao();
+      await refreshOpenBaoStatus();
+      baoStatusError = msg;
+    } catch (err) {
+      baoStatusError = errorMessage(err);
+    } finally {
+      baoLoginBusy = false;
+    }
+  }
+
+  async function clearOpenBaoToken() {
+    baoStatusError = "";
+    try {
+      await api.clearOpenBaoToken();
+      await refreshOpenBaoStatus();
+    } catch (err) {
+      baoStatusError = errorMessage(err);
+    }
+  }
+
+  function openSettings() {
+    refreshOpenBaoStatus();
+    settingsDialog?.showModal();
+  }
+
+  // ═════════════════ Connect routing ═════════════════
+
+  function connectServer(id: number) {
+    const conn = connections.find((c) => c.id === id);
+    if (!conn) return;
+    if (conn.credential_source === "openbao") {
+      connectViaOpenBao(id);
+    } else {
+      promptPassword(id);
+    }
+  }
+
+  async function connectViaOpenBao(id: number) {
+    const serverNode = tree.find((n) => n.conn.id === id);
+    if (!serverNode) return;
+    serverNode.loading = true;
+    serverNode.error = null;
+    try {
+      const state = await api.connectServer(id, null);
+      connectedState[id] = state;
+      serverNode.expanded = true;
+      loadDatabases(serverNode);
+    } catch (err) {
+      serverNode.error = errorMessage(err);
+    } finally {
+      serverNode.loading = false;
+    }
+  }
+
   // ═════════════════ Refresh ═════════════════
 
   /** Walk up to the enclosing DatabaseNode for the menu target, then
@@ -308,7 +396,7 @@ import { encodeCsv } from "$lib/csv";
 
     switch (action) {
       case "connect":
-        if (target.kind === "server") promptPassword(target.conn.id);
+        if (target.kind === "server") connectServer(target.conn.id);
         break;
       case "edit":
         if (target.kind === "server") openEditModal(target.conn);
@@ -657,7 +745,10 @@ import { encodeCsv } from "$lib/csv";
   <aside class="left-pane" style="width: {leftPaneWidth}px">
     <div class="header-row">
       <h2>Connections</h2>
-      <button class="btn" onclick={openAddModal}>+ Add</button>
+      <div style="display: flex; gap: 0.3rem;">
+        <button class="btn" onclick={openSettings} title="Settings">⚙</button>
+        <button class="btn" onclick={openAddModal}>+ Add</button>
+      </div>
     </div>
 
     {#if tree.length === 0}
@@ -673,7 +764,7 @@ import { encodeCsv } from "$lib/csv";
                 {selectedDb}
                 onSelectDb={selectDb}
                 onContextMenu={openMenu}
-                onConnectServer={promptPassword}
+                onConnectServer={connectServer}
               />
               <span class="slot-badge">{slotLabel(connectedState[serverNode.conn.id])}</span>
             </div>
@@ -867,6 +958,41 @@ import { encodeCsv } from "$lib/csv";
       <button type="submit" class="btn btn-primary">Connect</button>
     </div>
   </form>
+</dialog>
+
+<!-- ═══════ SETTINGS DIALOG ═══════ -->
+<dialog bind:this={settingsDialog} class="modal">
+  <h2>Settings</h2>
+  <div class="add-form">
+    <h3>OpenBao</h3>
+    <label class="field">
+      Server address
+      <input class="input"
+             bind:value={baoAddr}
+             placeholder="https://vault.internal:8200" />
+    </label>
+    <button class="btn btn-primary" onclick={saveBaoAddr}>Save address</button>
+
+    <p style="margin-top: 1rem;">
+      Token: <strong>{baoHasToken ? "Present" : "None"}</strong>
+    </p>
+    <div class="modal-actions" style="justify-content: flex-start;">
+      <button class="btn btn-primary" onclick={loginOpenBao} disabled={baoLoginBusy}>
+        {baoLoginBusy ? "Opening browser…" : "Login with browser"}
+      </button>
+      {#if baoHasToken}
+        <button class="btn" onclick={clearOpenBaoToken}>Clear token</button>
+      {/if}
+    </div>
+
+    {#if baoStatusError}
+      <p class="error">{baoStatusError}</p>
+    {/if}
+
+    <div class="modal-actions" style="margin-top: 1rem;">
+      <button type="button" class="btn" onclick={() => settingsDialog?.close()}>Close</button>
+    </div>
+  </div>
 </dialog>
 
 <!-- ═══════ CHANGE-DATABASE DIALOG ═══════ -->

@@ -177,6 +177,14 @@ export type NewSavedQuery = {
   sql: string;
 };
 
+// ── OpenBao status (mirrors commands::OpenBaoStatus) ──
+
+export type OpenBaoStatus = {
+  configured: boolean;
+  has_token: boolean;
+  addr: string | null;
+};
+
 // ── Error type (mirrors commands::CommandError serde tagging) ──
 
 export type CommandError = {
@@ -277,4 +285,16 @@ export const api = {
 
   writeTextFile: (path: string, content: string) =>
     invoke<void>("write_text_file", { path, content }),
+
+  loginOpenBao: () =>
+    invoke<string>("login_openbao"),
+
+  getOpenBaoStatus: () =>
+    invoke<OpenBaoStatus>("get_openbao_status"),
+
+  clearOpenBaoToken: () =>
+    invoke<void>("clear_openbao_token"),
+
+  setSetting: (key: string, value: string) =>
+    invoke<void>("set_setting", { key, value }),
 };
