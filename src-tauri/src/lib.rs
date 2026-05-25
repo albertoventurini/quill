@@ -55,6 +55,7 @@ pub fn run() {
             commands::get_openbao_status,
             commands::clear_openbao_token,
             commands::set_setting,
+            commands::refresh_openbao_creds,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

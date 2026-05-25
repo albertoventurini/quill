@@ -54,6 +54,8 @@ import { encodeCsv } from "$lib/csv";
   let baoStatusError = $state("");
   let baoLoginBusy = $state(false);
 
+  let expiryPollHandle = $state<ReturnType<typeof setInterval> | null>(null);
+
   // Context menu (new).
   let menu = $state<{
     x: number;
@@ -132,6 +134,12 @@ import { encodeCsv } from "$lib/csv";
       credential_source: "password",
       bao_role_path: null,
     };
+  }
+
+  function expiryRemainingMs(state: SlotState | undefined): number {
+    const e = state?.credential_expiry;
+    if (!e) return Infinity;
+    return e.secs_since_epoch * 1000 + Math.floor(e.nanos_since_epoch / 1_000_000) - Date.now();
   }
 
   // ═════════════════ Helpers ═════════════════
@@ -305,6 +313,23 @@ import { encodeCsv } from "$lib/csv";
     settingsDialog?.showModal();
   }
 
+  $effect(() => {
+    const connected = Object.keys(connectedState).map(Number);
+    if (connected.length === 0) {
+      if (expiryPollHandle) { clearInterval(expiryPollHandle); expiryPollHandle = null; }
+      return;
+    }
+    if (expiryPollHandle) return;
+    expiryPollHandle = setInterval(async () => {
+      for (const sid of connected) {
+        try {
+          const s = await api.getSlotState(sid);
+          if (s) connectedState[sid] = s;
+        } catch {}
+      }
+    }, 30_000);
+  });
+
   // ═════════════════ Connect routing ═════════════════
 
   function connectServer(id: number) {
@@ -331,6 +356,15 @@ import { encodeCsv } from "$lib/csv";
       serverNode.error = errorMessage(err);
     } finally {
       serverNode.loading = false;
+    }
+  }
+
+  async function refreshOpenBaoCreds(id: number) {
+    try {
+      const state = await api.refreshOpenBaoCreds(id);
+      connectedState[id] = state;
+    } catch (err) {
+      console.error("refresh failed", err);
     }
   }
 
@@ -404,6 +438,9 @@ import { encodeCsv } from "$lib/csv";
       case "disconnect":
         if (target.kind === "server") await disconnect(target.conn.id);
         break;
+      case "refresh-openbao":
+        if (target.kind === "server") await refreshOpenBaoCreds(target.conn.id);
+        break;
       case "refresh":
         await refreshFromTarget(target);
         break;
@@ -434,6 +471,9 @@ import { encodeCsv } from "$lib/csv";
     if (t.kind === "server") {
       if (isConnected(t.conn.id)) {
         items.push({ action: "disconnect", label: "Disconnect" });
+        if (t.conn.credential_source === "openbao") {
+          items.push({ action: "refresh-openbao", label: "Refresh OpenBao credentials" });
+        }
       } else {
         items.push({ action: "connect", label: "Connect…" });
         items.push({ action: "edit", label: "Edit connection…" });
@@ -766,7 +806,17 @@ import { encodeCsv } from "$lib/csv";
                 onContextMenu={openMenu}
                 onConnectServer={connectServer}
               />
-              <span class="slot-badge">{slotLabel(connectedState[serverNode.conn.id])}</span>
+              <span class="slot-badge">
+                {slotLabel(connectedState[serverNode.conn.id])}
+                {#if connectedState[serverNode.conn.id]}
+                  {@const remaining = expiryRemainingMs(connectedState[serverNode.conn.id])}
+                  {#if remaining < 60_000}
+                    <span class="expiry expiry-critical">expires in {Math.ceil(remaining / 1000)}s</span>
+                  {:else if remaining < 300_000}
+                    <span class="expiry expiry-warn">expires in {Math.ceil(remaining / 60_000)}m</span>
+                  {/if}
+                {/if}
+              </span>
             </div>
           </div>
         {/each}
@@ -1034,6 +1084,9 @@ import { encodeCsv } from "$lib/csv";
   .server-block { display: flex; flex-direction: column; }
   .server-row { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
   .slot-badge { font-size: 0.8rem; color: #666; font-variant-numeric: tabular-nums; padding-right: 0.3rem; }
+  .expiry { font-size: 0.75rem; margin-left: 0.4rem; }
+  .expiry-warn { color: #b8860b; }
+  .expiry-critical { color: #b00020; font-weight: bold; }
 
   .btn { padding: 0.3rem 0.6rem; border: 1px solid #888; border-radius: 4px; background: #f0f0f0; cursor: pointer; font: inherit; font-size: 0.9rem; }
   .btn:hover { background: #e0e0e0; }

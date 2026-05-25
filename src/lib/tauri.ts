@@ -46,6 +46,7 @@ export type SlotInfo = {
 export type SlotState = {
   budget: number;
   slots: SlotInfo[];
+  credential_expiry: { secs_since_epoch: number; nanos_since_epoch: number } | null;
 };
 
 // ── Query results (mirrors query::RunResult / ChunkResult) ──
@@ -297,4 +298,7 @@ export const api = {
 
   setSetting: (key: string, value: string) =>
     invoke<void>("set_setting", { key, value }),
+
+  refreshOpenBaoCreds: (id: number) =>
+    invoke<SlotState>("refresh_openbao_creds", { id }),
 };

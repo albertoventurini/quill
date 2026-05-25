@@ -531,6 +531,66 @@ pub async fn set_setting(
     Ok(())
 }
 
+/// Refresh OpenBao credentials for a connected server.
+///
+/// Disconnects all slots, fetches fresh dynamic credentials, and reconnects.
+/// Only valid for connections with `credential_source = "openbao"`.
+#[tauri::command]
+pub async fn refresh_openbao_creds(
+    id: i64,
+    pool: State<'_, sqlx::SqlitePool>,
+    registry: State<'_, ServerRegistry>,
+    results: State<'_, ResultRegistry>,
+) -> Result<SlotState, CommandError> {
+    if let Some((_, handle)) = registry.by_id.remove(&id) {
+        query::sweep_for_server(id, &results).await;
+        handle.slot_manager.disconnect_all().await;
+        drop(handle);
+    }
+
+    let conn = store::get(&pool, id)
+        .await?
+        .ok_or_else(|| CommandError::unknown_connection(id))?;
+
+    if conn.credential_source != "openbao" {
+        return Err(CommandError::OpenBao(
+            "This server does not use OpenBao credentials.".into(),
+        ));
+    }
+
+    let bao = openbao::OpenBaoClient::from_store(&pool)
+        .await?
+        .ok_or_else(|| {
+            CommandError::OpenBao(
+                "OpenBao not configured. Set up the server address and login in Settings.".into(),
+            )
+        })?;
+    let role_path = conn.bao_role_path.as_deref().ok_or_else(|| {
+        CommandError::OpenBao("no role path configured for this connection".into())
+    })?;
+    let creds = bao.fetch_pg_creds(role_path).await?;
+    let expiry =
+        SystemTime::now().checked_add(Duration::from_secs(creds.lease_duration_secs));
+
+    let ssl_mode =
+        PgConnector::parse_ssl_mode(&conn.ssl_mode).map_err(|e| CommandError::Pg(e.0))?;
+    let connector = PgConnector {
+        host: conn.host.clone(),
+        port: conn.port as u16,
+        username: creds.username,
+        password: creds.password,
+        ssl_mode,
+    };
+
+    let budget = conn.slot_budget.max(1) as usize;
+    let mut handle = ServerHandle::new(connector, budget);
+    handle.credential_expiry = expiry;
+    let mut state = handle.slot_manager.state();
+    state.credential_expiry = expiry;
+    registry.by_id.insert(id, handle);
+    Ok(state)
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Schema-cache helpers
 // ═══════════════════════════════════════════════════════════════════════════
