@@ -58,14 +58,16 @@ struct OidcCallbackAuth {
 #[derive(Debug, Deserialize)]
 struct PgCredsResponse {
     data: PgCredsData,
+    // The database secrets engine reports the lease TTL at the top level of the response,
+    // not inside `data`.
+    #[serde(default)]
+    lease_duration: u64,
 }
 
 #[derive(Debug, Deserialize)]
 struct PgCredsData {
     username: String,
     password: String,
-    #[serde(default)]
-    lease_duration: u64,
 }
 
 pub struct PgCredentials {
@@ -172,8 +174,8 @@ impl OpenBaoClient {
         Ok(PgCredentials {
             username: creds.data.username,
             password: SecretString::from(creds.data.password),
-            lease_duration_secs: if creds.data.lease_duration > 0 {
-                creds.data.lease_duration
+            lease_duration_secs: if creds.lease_duration > 0 {
+                creds.lease_duration
             } else {
                 3600
             },
