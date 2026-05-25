@@ -138,7 +138,7 @@ where
 {
     tokio::spawn(async move {
         if let Err(e) = connection.await {
-            eprintln!("[quill] postgres connection task ended with error: {e}");
+            tracing::error!("postgres connection task ended with error: {e}");
         }
     });
 }

@@ -145,20 +145,29 @@ impl OpenBaoClient {
             .send()
             .await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
+        let status = resp.status();
+        let body_text = resp.text().await.unwrap_or_default();
+
+        if !status.is_success() {
+            tracing::error!(
+                "OpenBao ({url}) returned {status}: {body_text}",
+            );
             return Err(OpenBaoError::Request(format!(
-                "OpenBao returned {}: {}",
-                status,
-                body,
+                "OpenBao returned {status}: {}",
+                truncate_body(&body_text),
             )));
         }
 
-        let creds: PgCredsResponse = resp
-            .json()
-            .await
-            .map_err(|e| OpenBaoError::BadResponse(format!("failed to parse credentials: {e}")))?;
+        let creds: PgCredsResponse =
+            serde_json::from_str(&body_text).map_err(|e| {
+                tracing::error!(
+                    "OpenBao creds parse failed (status {status}): body={body_text} error={e}",
+                );
+                OpenBaoError::BadResponse(format!(
+                    "failed to parse credentials: {e}. Body: {}",
+                    truncate_body(&body_text),
+                ))
+            })?;
 
         Ok(PgCredentials {
             username: creds.data.username,
@@ -174,6 +183,7 @@ impl OpenBaoClient {
 
 pub async fn start_oidc_login(
     bao_addr: &str,
+    role: &str,
     app_handle: &tauri::AppHandle,
 ) -> Result<String, OpenBaoError> {
     use tauri_plugin_opener::OpenerExt;
@@ -185,20 +195,44 @@ pub async fn start_oidc_login(
     let port = listener.local_addr().unwrap().port();
     let redirect_uri = format!("http://localhost:{port}/callback");
 
-    let auth_url_resp: OidcAuthUrlResponse = client
-        .post(format!(
-            "{}/v1/auth/oidc/auth_url",
-            bao_addr.trim_end_matches('/')
-        ))
+    let auth_url = format!(
+        "{}/v1/auth/oidc/auth_url",
+        bao_addr.trim_end_matches('/')
+    );
+
+    let resp = client
+        .post(&auth_url)
         .json(&serde_json::json!({
-            "role": "default",
+            "role": role,
             "redirect_uri": &redirect_uri,
         }))
         .send()
-        .await?
-        .json()
-        .await
-        .map_err(|e| OpenBaoError::BadResponse(format!("auth_url parse: {e}")))?;
+        .await?;
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        tracing::error!(
+            "OpenBao auth_url ({}) returned {status}: {body_text}",
+            auth_url,
+        );
+        return Err(OpenBaoError::BadResponse(format!(
+            "auth_url returned {status}: {}",
+            truncate_body(&body_text),
+        )));
+    }
+
+    let auth_url_resp: OidcAuthUrlResponse =
+        serde_json::from_str(&body_text).map_err(|e| {
+            tracing::error!(
+                "OpenBao auth_url parse failed (status {status}): body={body_text} error={e}",
+            );
+            OpenBaoError::BadResponse(format!(
+                "auth_url returned {status}, could not parse response: {e}. Body: {}",
+                truncate_body(&body_text),
+            ))
+        })?;
 
     app_handle
         .opener()
@@ -207,22 +241,54 @@ pub async fn start_oidc_login(
 
     let (code, state) = accept_callback(listener).await?;
 
-    let cb_resp: OidcCallbackResponse = client
-        .post(format!(
-            "{}/v1/auth/oidc/callback",
-            bao_addr.trim_end_matches('/')
-        ))
+    let cb_url = format!(
+        "{}/v1/auth/oidc/callback",
+        bao_addr.trim_end_matches('/')
+    );
+
+    let resp = client
+        .post(&cb_url)
         .json(&serde_json::json!({
             "state": state,
             "code": code,
         }))
         .send()
-        .await?
-        .json()
-        .await
-        .map_err(|e| OpenBaoError::BadResponse(format!("callback parse: {e}")))?;
+        .await?;
+
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap_or_default();
+
+    if !status.is_success() {
+        tracing::error!(
+            "OpenBao callback ({}) returned {status}: {body_text}",
+            cb_url,
+        );
+        return Err(OpenBaoError::BadResponse(format!(
+            "callback returned {status}: {}",
+            truncate_body(&body_text),
+        )));
+    }
+
+    let cb_resp: OidcCallbackResponse =
+        serde_json::from_str(&body_text).map_err(|e| {
+            tracing::error!(
+                "OpenBao callback parse failed (status {status}): body={body_text} error={e}",
+            );
+            OpenBaoError::BadResponse(format!(
+                "callback returned {status}, could not parse response: {e}. Body: {}",
+                truncate_body(&body_text),
+            ))
+        })?;
 
     Ok(cb_resp.auth.client_token)
+}
+
+fn truncate_body(body: &str) -> &str {
+    if body.len() > 300 {
+        &body[..300]
+    } else {
+        body
+    }
 }
 
 async fn accept_callback(

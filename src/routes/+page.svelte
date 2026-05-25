@@ -51,6 +51,7 @@ import { save } from "@tauri-apps/plugin-dialog";
   // Settings dialog
   let settingsDialog = $state<HTMLDialogElement | null>(null);
   let baoAddr = $state("");
+  let baoOidcRole = $state("default");
   let baoHasToken = $state(false);
   let baoStatusError = $state("");
   let baoLoginBusy = $state(false);
@@ -268,6 +269,7 @@ import { save } from "@tauri-apps/plugin-dialog";
     try {
       const settings = await api.getAllSettings();
       baoAddr = settings["openbao_addr"] ?? "";
+      baoOidcRole = settings["openbao_oidc_role"] ?? "default";
       baoHasToken = "openbao_token" in settings;
       baoStatusError = "";
     } catch (err) {
@@ -275,10 +277,11 @@ import { save } from "@tauri-apps/plugin-dialog";
     }
   }
 
-  async function saveBaoAddr() {
+  async function saveBaoSettings() {
     baoStatusError = "";
     try {
       await api.setSetting("openbao_addr", baoAddr);
+      await api.setSetting("openbao_oidc_role", baoOidcRole);
       await refreshOpenBaoStatus();
     } catch (err) {
       baoStatusError = errorMessage(err);
@@ -1025,7 +1028,13 @@ import { save } from "@tauri-apps/plugin-dialog";
              bind:value={baoAddr}
              placeholder="https://vault.internal:8200" />
     </label>
-    <button class="btn btn-primary" onclick={saveBaoAddr}>Save address</button>
+    <label class="field">
+      OIDC role
+      <input class="input"
+             bind:value={baoOidcRole}
+             placeholder="default" />
+    </label>
+    <button class="btn btn-primary" onclick={saveBaoSettings}>Save settings</button>
 
     <p style="margin-top: 1rem;">
       Token: <strong>{baoHasToken ? "Present" : "None"}</strong>

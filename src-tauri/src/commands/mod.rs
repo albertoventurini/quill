@@ -416,7 +416,7 @@ pub async fn run_query(
     };
 
     if let Err(history_err) = history::append(&pool, record).await {
-        eprintln!("history::append failed: {history_err}");
+        tracing::error!("history::append failed: {history_err}");
     }
 
     response
@@ -488,7 +488,14 @@ pub async fn login_openbao(
             )
         })?;
 
-    let token = openbao::start_oidc_login(&addr, &app).await?;
+    let token = openbao::start_oidc_login(
+        &addr,
+        &openbao::get_setting(&pool, "openbao_oidc_role")
+            .await
+            .unwrap_or_else(|| "default".into()),
+        &app,
+    )
+    .await?;
     openbao::set_setting(&pool, "openbao_token", &token).await?;
     Ok("Login successful.".into())
 }
