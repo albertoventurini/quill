@@ -228,7 +228,7 @@
             title={r.sql}
           >
             <span class="ts">{formatTs(r.ts)}</span>
-            <span class="db">{r.database}{#if r.schema}<span class="schema" title="scoped to {r.schema}">.{r.schema}</span>{/if}</span>
+            <span class="db" title={r.schema ? `${r.database}.${r.schema}` : r.database}>{r.database}{#if r.schema}<span class="schema">.{r.schema}</span>{/if}</span>
             <span class="sql">{r.ok ? "" : "✕ "}{shortSql(r.sql)}</span>
             <span class="duration">{r.duration_ms}ms</span>
           </button>
@@ -356,8 +356,15 @@
   .row:hover { background: var(--bg-row-hover); }
   .row.failed { color: var(--text-error); }
   .row.failed .sql { color: var(--text-error); }
-  .ts { color: var(--text-mid); min-width: 7em; }
-  .db { color: var(--text-db); min-width: 6em; }
+  .ts { color: var(--text-mid); min-width: 7em; flex-shrink: 0; }
+  .db {
+    color: var(--text-db);
+    min-width: 6em;
+    max-width: 14em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .schema { color: var(--text-accent); }
   .sql {
     flex: 1;
