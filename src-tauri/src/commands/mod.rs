@@ -271,7 +271,7 @@ pub async fn delete_connection(
 /// 1. Load the `Connection` from the store; return `UnknownConnection` if missing.
 /// 2. If the registry already contains a `ServerHandle` for `id`, reuse it.
 /// 3. Otherwise, route by `credential_source`:
-///    - `"password"` — build a `PgConnector` from the row + supplied password.
+///    - `"password"` — build a `PgConnector` from the row + supplied username and password.
 ///    - `"openbao"` — fetch dynamic credentials from OpenBao first.
 /// 4. Create a new `SlotManager<PgConnector>` with the row's `slot_budget`.
 /// 5. Return the current `SlotState`.  **No Postgres connection is opened**
@@ -279,6 +279,7 @@ pub async fn delete_connection(
 #[tauri::command]
 pub async fn connect_server(
     id: i64,
+    username: Option<String>,
     password: Option<String>,
     pool: State<'_, sqlx::SqlitePool>,
     registry: State<'_, ServerRegistry>,
@@ -296,10 +297,13 @@ pub async fn connect_server(
 
     let (username, password, expiry) = match conn.credential_source.as_str() {
         "password" => {
+            let user = username.ok_or_else(|| {
+                CommandError::Pg("username is required for password-based connections".into())
+            })?;
             let pw = password.ok_or_else(|| {
                 CommandError::Pg("password is required for password-based connections".into())
             })?;
-            (conn.username.clone(), SecretString::from(pw), None)
+            (user, SecretString::from(pw), None)
         }
         "openbao" => {
             let bao = openbao::OpenBaoClient::from_store(&pool, &tokens)

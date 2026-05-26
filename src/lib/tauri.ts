@@ -10,26 +10,23 @@ export type Connection = {
   host: string;
   port: number;
   default_db: string;
-  username: string;
   ssl_mode: string;
   slot_budget: number;
-  password_ref: string | null;
   credential_source: string;
   bao_role_path: string | null;
   created_at: string;
 };
 
-/** Fields for creating a new connection. `password_ref` must be `null` in
- *  M1 — the OS keychain lands in M6. */
+/** Fields for creating a new connection. No credentials are stored: for
+ *  password auth the username and password are prompted on every connect;
+ *  for OpenBao both come dynamically from the vault. */
 export type NewConnection = {
   name: string;
   host: string;
   port: number;
   default_db: string;
-  username: string;
   ssl_mode: string;
   slot_budget: number;
-  password_ref: null;
   credential_source: string;
   bao_role_path: string | null;
 };
@@ -210,8 +207,8 @@ export const api = {
   deleteConnection: (id: number) =>
     invoke<void>("delete_connection", { id }),
 
-  connectServer: (id: number, password: string | null) =>
-    invoke<SlotState>("connect_server", { id, password }),
+  connectServer: (id: number, username: string | null, password: string | null) =>
+    invoke<SlotState>("connect_server", { id, username, password }),
 
   updateConnection: (id: number, update: NewConnection) =>
     invoke<Connection>("update_connection", { id, new: update }),

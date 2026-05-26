@@ -71,10 +71,8 @@ async fn full_cycle_store_to_disconnect() {
             host: dsn.host.clone(),
             port: dsn.port as i32,
             default_db: dsn.database.clone(),
-            username: dsn.username.clone(),
             ssl_mode: "disable".into(),
             slot_budget: 2,
-            password_ref: None,
             credential_source: "password".into(),
             bao_role_path: None,
         },
@@ -96,7 +94,7 @@ async fn full_cycle_store_to_disconnect() {
     let connector = PgConnector {
         host: conn.host.clone(),
         port: conn.port as u16,
-        username: conn.username.clone(),
+        username: dsn.username.clone(),
         password: SecretString::from(dsn.password.clone()),
         ssl_mode,
     };

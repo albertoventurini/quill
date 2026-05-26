@@ -43,6 +43,7 @@ import { save } from "@tauri-apps/plugin-dialog";
   // Password dialog (new).
   let pwDialog = $state<HTMLDialogElement | null>(null);
   let pwTargetId = $state<number | null>(null);
+  let pwUsername = $state("");
   let pwPassword = $state("");
   let pwError = $state("");
 
@@ -130,10 +131,8 @@ import { save } from "@tauri-apps/plugin-dialog";
       host: "localhost",
       port: 5432,
       default_db: "postgres",
-      username: "postgres",
       ssl_mode: "disable",
       slot_budget: 2,
-      password_ref: null,
       credential_source: "password",
       bao_role_path: null,
     };
@@ -231,10 +230,8 @@ import { save } from "@tauri-apps/plugin-dialog";
       host: conn.host,
       port: conn.port,
       default_db: conn.default_db,
-      username: conn.username,
       ssl_mode: conn.ssl_mode,
       slot_budget: conn.slot_budget,
-      password_ref: null,
       credential_source: conn.credential_source,
       bao_role_path: conn.bao_role_path,
     };
@@ -265,6 +262,7 @@ import { save } from "@tauri-apps/plugin-dialog";
 
   function promptPassword(id: number) {
     pwTargetId = id;
+    pwUsername = "";
     pwPassword = "";
     pwError = "";
     pwDialog?.showModal();
@@ -275,7 +273,7 @@ import { save } from "@tauri-apps/plugin-dialog";
     if (pwTargetId === null) return;
     pwError = "";
     try {
-      const state = await api.connectServer(pwTargetId, pwPassword);
+      const state = await api.connectServer(pwTargetId, pwUsername, pwPassword);
         connectedState[pwTargetId] = state;
         const serverNode = tree.find((n) => n.conn.id === pwTargetId);
         if (serverNode) {
@@ -418,7 +416,7 @@ import { save } from "@tauri-apps/plugin-dialog";
     serverNode.loading = true;
     serverNode.error = null;
     try {
-      const state = await api.connectServer(id, null);
+      const state = await api.connectServer(id, null, null);
       connectedState[id] = state;
       serverNode.expanded = true;
       loadDatabases(serverNode);
@@ -1080,7 +1078,6 @@ import { save } from "@tauri-apps/plugin-dialog";
     <label class="field">Host<input class="input" bind:value={addForm.host} required /></label>
     <label class="field">Port<input class="input" type="number" min={1} max={65535} bind:value={addForm.port} /></label>
     <label class="field">Default database<input class="input" bind:value={addForm.default_db} required /></label>
-    <label class="field">Username<input class="input" bind:value={addForm.username} required /></label>
     <label class="field">
       Credential source
       <select class="input" bind:value={addForm.credential_source}>
@@ -1124,14 +1121,18 @@ import { save } from "@tauri-apps/plugin-dialog";
   </form>
 </dialog>
 
-<!-- ═══════ PASSWORD DIALOG ═══════ -->
+<!-- ═══════ CONNECT (USERNAME + PASSWORD) DIALOG ═══════ -->
 <dialog bind:this={pwDialog} class="modal">
-  <h2>Password</h2>
+  <h2>Connect</h2>
   <form onsubmit={submitPassword} class="add-form">
     <label class="field">
-      Password
+      Username
       <!-- svelte-ignore a11y_autofocus -->
-      <input type="password" class="input" bind:value={pwPassword} autofocus />
+      <input type="text" class="input" bind:value={pwUsername} autocomplete="off" autofocus />
+    </label>
+    <label class="field">
+      Password
+      <input type="password" class="input" bind:value={pwPassword} />
     </label>
     {#if pwError}<p class="error">{pwError}</p>{/if}
     <div class="modal-actions">
