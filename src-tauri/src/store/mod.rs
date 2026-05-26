@@ -243,11 +243,11 @@ mod tests {
             username: "alice".into(),
             ssl_mode: "prefer".into(),
             slot_budget: 2,
-        password_ref: None,
-        credential_source: "password".into(),
-        bao_role_path: None,
+            password_ref: None,
+            credential_source: "password".into(),
+            bao_role_path: None,
+        }
     }
-}
 
     #[tokio::test]
     async fn test_migration_runs_cleanly() {

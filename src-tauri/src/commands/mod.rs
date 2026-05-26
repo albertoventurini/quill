@@ -373,6 +373,7 @@ pub async fn disconnect_server(
 /// elapsed before the error and `ok=false`.  History failures are logged
 /// and swallowed — they never alter the response visible to the user.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)] // Tauri command: args are injected params, not a smell.
 pub async fn run_query(
     server_id: i64,
     database: String,
@@ -518,9 +519,7 @@ pub async fn login_openbao(
     let addr = openbao::get_setting(&pool, "openbao_addr")
         .await
         .ok_or_else(|| {
-            CommandError::OpenBao(
-                "OpenBao address not configured. Set it in Settings.".into(),
-            )
+            CommandError::OpenBao("OpenBao address not configured. Set it in Settings.".into())
         })?;
 
     let token = openbao::start_oidc_login(
@@ -620,8 +619,7 @@ pub async fn refresh_openbao_creds(
         CommandError::OpenBao("no role path configured for this connection".into())
     })?;
     let creds = bao.fetch_pg_creds(role_path).await?;
-    let expiry =
-        SystemTime::now().checked_add(Duration::from_secs(creds.lease_duration_secs));
+    let expiry = SystemTime::now().checked_add(Duration::from_secs(creds.lease_duration_secs));
 
     let ssl_mode =
         PgConnector::parse_ssl_mode(&conn.ssl_mode).map_err(|e| CommandError::Pg(e.0))?;

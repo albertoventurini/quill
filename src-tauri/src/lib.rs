@@ -2,6 +2,7 @@ pub mod commands;
 pub mod history;
 pub mod introspect;
 pub mod logging;
+pub mod openbao;
 pub mod parse;
 pub mod pg;
 pub mod query;
@@ -9,7 +10,6 @@ pub mod registry;
 pub mod saved;
 pub mod slots;
 pub mod store;
-pub mod openbao;
 
 use tauri::Manager;
 
@@ -20,9 +20,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle();
-            let app_data_dir = handle.path().app_data_dir().map_err(|e| {
-                Box::<dyn std::error::Error>::from(e.to_string())
-            })?;
+            let app_data_dir = handle
+                .path()
+                .app_data_dir()
+                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
             logging::init(&app_data_dir);
             let pool = tauri::async_runtime::block_on(store::open(handle))?;
             let tokens = openbao::TokenStore::default();
