@@ -69,7 +69,7 @@ jobs:
 
       # Rust: RustSec advisories + crates.io-only source allowlist + ban checks.
       - name: cargo-deny
-        uses: EmbarkStudios/cargo-deny-action@v2
+        uses: EmbarkStudios/cargo-deny-action@v2.0.18
         with:
           manifest-path: src-tauri/Cargo.toml
           command: check advisories bans sources
