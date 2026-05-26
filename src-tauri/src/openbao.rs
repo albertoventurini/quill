@@ -1,9 +1,125 @@
+use std::sync::Mutex;
 use std::time::Duration;
 
 use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use thiserror::Error;
+
+const KEYRING_SERVICE: &str = "quill";
+const KEYRING_ACCOUNT: &str = "openbao_token";
+
+/// Where the OpenBao token lives at runtime.
+///
+/// Preference order is OS keyring → in-memory. Any keyring failure (no Secret Service
+/// provider, locked keychain, denied access) is treated the same: the token is kept in
+/// memory for this session only and the caller is told it did not persist, so the UI can
+/// warn that a re-login will be needed after restart. The keyring is only ever touched on
+/// explicit user actions (login, connect, refresh, opening Settings) — never eagerly at
+/// launch.
+#[derive(Default)]
+pub struct TokenStore {
+    mem: Mutex<Option<SecretString>>,
+    persisted: Mutex<bool>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum StoreOutcome {
+    Persisted,
+    InMemoryOnly,
+}
+
+impl StoreOutcome {
+    pub fn persisted(self) -> bool {
+        matches!(self, StoreOutcome::Persisted)
+    }
+}
+
+impl TokenStore {
+    /// Store `token`, trying the OS keyring first. Always succeeds (falls back to memory);
+    /// the returned outcome says whether it actually persisted.
+    pub async fn store(&self, token: &str) -> StoreOutcome {
+        let owned = token.to_string();
+        let persisted = tokio::task::spawn_blocking(move || {
+            keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+                .and_then(|e| e.set_password(&owned))
+                .is_ok()
+        })
+        .await
+        .unwrap_or(false);
+
+        *self.mem.lock().unwrap() = Some(SecretString::from(token.to_string()));
+        *self.persisted.lock().unwrap() = persisted;
+
+        if persisted {
+            StoreOutcome::Persisted
+        } else {
+            tracing::warn!(
+                "OS keyring unavailable; keeping OpenBao token in memory for this session only"
+            );
+            StoreOutcome::InMemoryOnly
+        }
+    }
+
+    /// Return the token, checking memory first and falling back to the keyring (which
+    /// hydrates memory on a hit). `None` if neither holds one.
+    pub async fn load(&self) -> Option<SecretString> {
+        if let Some(tok) = self.mem.lock().unwrap().as_ref() {
+            return Some(SecretString::from(tok.expose_secret().to_string()));
+        }
+        let fetched = tokio::task::spawn_blocking(|| {
+            keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+                .and_then(|e| e.get_password())
+                .ok()
+        })
+        .await
+        .ok()
+        .flatten()?;
+
+        *self.mem.lock().unwrap() = Some(SecretString::from(fetched.clone()));
+        *self.persisted.lock().unwrap() = true;
+        Some(SecretString::from(fetched))
+    }
+
+    /// Forget the token: wipe memory and best-effort delete from the keyring.
+    pub async fn clear(&self) {
+        *self.mem.lock().unwrap() = None;
+        *self.persisted.lock().unwrap() = false;
+        let _ = tokio::task::spawn_blocking(|| {
+            if let Ok(e) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT) {
+                let _ = e.delete_credential();
+            }
+        })
+        .await;
+    }
+
+    /// Seed the in-memory token without touching the keyring. Used by the one-time
+    /// plaintext→keyring migration so the current session keeps working.
+    pub fn seed_memory(&self, token: &str) {
+        *self.mem.lock().unwrap() = Some(SecretString::from(token.to_string()));
+        *self.persisted.lock().unwrap() = false;
+    }
+
+    /// Cheap, mem-only snapshot: `(present, persisted)`.
+    pub fn status(&self) -> (bool, bool) {
+        let present = self.mem.lock().unwrap().is_some();
+        let persisted = *self.persisted.lock().unwrap();
+        (present, persisted)
+    }
+}
+
+/// One-time migration: lift any legacy plaintext token out of the SQLite `settings` table.
+/// Seeds it into memory for the current session, then deletes the plaintext row so no secret
+/// is left behind on disk. The next login persists it to the keyring properly.
+pub async fn migrate_plaintext_token(pool: &SqlitePool, tokens: &TokenStore) {
+    if let Some(token) = get_setting(pool, "openbao_token").await {
+        tokens.seed_memory(&token);
+        match remove_setting(pool, "openbao_token").await {
+            Ok(()) => tracing::info!("migrated OpenBao token out of plaintext settings storage"),
+            Err(e) => tracing::warn!("failed to delete legacy plaintext OpenBao token: {e}"),
+        }
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum OpenBaoError {
@@ -121,18 +237,21 @@ pub async fn remove_setting(pool: &SqlitePool, key: &str) -> Result<(), OpenBaoE
 }
 
 impl OpenBaoClient {
-    pub async fn from_store(pool: &SqlitePool) -> Result<Option<Self>, OpenBaoError> {
+    pub async fn from_store(
+        pool: &SqlitePool,
+        tokens: &TokenStore,
+    ) -> Result<Option<Self>, OpenBaoError> {
         let addr = match get_setting(pool, "openbao_addr").await {
             Some(a) => a,
             None => return Ok(None),
         };
-        let token = match get_setting(pool, "openbao_token").await {
+        let token = match tokens.load().await {
             Some(t) => t,
             None => return Ok(None),
         };
         Ok(Some(Self {
             addr,
-            token: SecretString::from(token),
+            token,
             client: reqwest::Client::new(),
         }))
     }

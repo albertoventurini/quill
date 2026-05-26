@@ -282,10 +282,13 @@ export const api = {
     invoke<void>("write_text_file", { path, content }),
 
   loginOpenBao: () =>
-    invoke<string>("login_openbao"),
+    invoke<{ persisted: boolean }>("login_openbao"),
 
   clearOpenBaoToken: () =>
     invoke<void>("clear_openbao_token"),
+
+  openBaoTokenStatus: () =>
+    invoke<{ present: boolean; persisted: boolean }>("openbao_token_status"),
 
   setSetting: (key: string, value: string) =>
     invoke<void>("set_setting", { key, value }),

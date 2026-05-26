@@ -53,6 +53,7 @@ import { save } from "@tauri-apps/plugin-dialog";
   let baoAddr = $state("");
   let baoOidcRole = $state("");
   let baoHasToken = $state(false);
+  let baoTokenPersisted = $state(false);
   let baoStatusError = $state("");
   let baoLoginBusy = $state(false);
 
@@ -331,7 +332,9 @@ import { save } from "@tauri-apps/plugin-dialog";
       // tells OpenBao to use the mount's configured default role.
       const storedRole = settings["openbao_oidc_role"] ?? "";
       baoOidcRole = storedRole === "default" ? "" : storedRole;
-      baoHasToken = "openbao_token" in settings;
+      const status = await api.openBaoTokenStatus();
+      baoHasToken = status.present;
+      baoTokenPersisted = status.persisted;
       baoStatusError = "";
     } catch (err) {
       baoStatusError = errorMessage(err);
@@ -353,9 +356,11 @@ import { save } from "@tauri-apps/plugin-dialog";
     baoStatusError = "";
     baoLoginBusy = true;
     try {
-      const msg = await api.loginOpenBao();
+      const { persisted } = await api.loginOpenBao();
       await refreshOpenBaoStatus();
-      baoStatusError = msg;
+      baoStatusError = persisted
+        ? "Login successful."
+        : "Login successful, but no OS keyring is available — the token is kept in memory only and you'll need to log in again after restarting Quill.";
     } catch (err) {
       baoStatusError = errorMessage(err);
     } finally {
@@ -1153,6 +1158,9 @@ import { save } from "@tauri-apps/plugin-dialog";
 
     <p style="margin-top: 1rem;">
       Token: <strong>{baoHasToken ? "Present" : "None"}</strong>
+      {#if baoHasToken && !baoTokenPersisted}
+        <span style="opacity: 0.7;">(in memory only — re-login needed after restart)</span>
+      {/if}
     </p>
     <div class="modal-actions" style="justify-content: flex-start;">
       <button class="btn btn-primary" onclick={loginOpenBao} disabled={baoLoginBusy}>

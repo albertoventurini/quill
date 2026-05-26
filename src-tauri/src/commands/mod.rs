@@ -282,6 +282,7 @@ pub async fn connect_server(
     password: Option<String>,
     pool: State<'_, sqlx::SqlitePool>,
     registry: State<'_, ServerRegistry>,
+    tokens: State<'_, openbao::TokenStore>,
 ) -> Result<SlotState, CommandError> {
     if let Some(handle) = registry.by_id.get(&id) {
         let mut state = handle.slot_manager.state();
@@ -301,7 +302,7 @@ pub async fn connect_server(
             (conn.username.clone(), SecretString::from(pw), None)
         }
         "openbao" => {
-            let bao = openbao::OpenBaoClient::from_store(&pool)
+            let bao = openbao::OpenBaoClient::from_store(&pool, &tokens)
                 .await?
                 .ok_or_else(|| {
                     CommandError::OpenBao(
@@ -494,11 +495,26 @@ pub fn get_slot_state(
     }))
 }
 
+/// Result of an OpenBao login: `persisted` is false when the token could only be kept in
+/// memory for this session (no usable OS keyring), so the UI can warn about re-login on restart.
+#[derive(serde::Serialize)]
+pub struct LoginOutcome {
+    pub persisted: bool,
+}
+
+/// Token availability for the Settings dialog.
+#[derive(serde::Serialize)]
+pub struct TokenStatus {
+    pub present: bool,
+    pub persisted: bool,
+}
+
 #[tauri::command]
 pub async fn login_openbao(
     pool: State<'_, sqlx::SqlitePool>,
+    tokens: State<'_, openbao::TokenStore>,
     app: tauri::AppHandle,
-) -> Result<String, CommandError> {
+) -> Result<LoginOutcome, CommandError> {
     let addr = openbao::get_setting(&pool, "openbao_addr")
         .await
         .ok_or_else(|| {
@@ -515,8 +531,10 @@ pub async fn login_openbao(
         &app,
     )
     .await?;
-    openbao::set_setting(&pool, "openbao_token", &token).await?;
-    Ok("Login successful.".into())
+    let outcome = tokens.store(&token).await;
+    Ok(LoginOutcome {
+        persisted: outcome.persisted(),
+    })
 }
 
 #[tauri::command]
@@ -536,10 +554,21 @@ pub async fn get_setting(
 
 #[tauri::command]
 pub async fn clear_openbao_token(
-    pool: State<'_, sqlx::SqlitePool>,
+    tokens: State<'_, openbao::TokenStore>,
 ) -> Result<(), CommandError> {
-    openbao::remove_setting(&pool, "openbao_token").await?;
+    tokens.clear().await;
     Ok(())
+}
+
+#[tauri::command]
+pub async fn openbao_token_status(
+    tokens: State<'_, openbao::TokenStore>,
+) -> Result<TokenStatus, CommandError> {
+    // `load` consults the keyring (hydrating memory on a hit), so opening Settings reflects a
+    // token persisted in a previous session — this is the one place we touch it on Settings open.
+    let present = tokens.load().await.is_some();
+    let (_, persisted) = tokens.status();
+    Ok(TokenStatus { present, persisted })
 }
 
 #[tauri::command]
@@ -562,6 +591,7 @@ pub async fn refresh_openbao_creds(
     pool: State<'_, sqlx::SqlitePool>,
     registry: State<'_, ServerRegistry>,
     results: State<'_, ResultRegistry>,
+    tokens: State<'_, openbao::TokenStore>,
 ) -> Result<SlotState, CommandError> {
     if let Some((_, handle)) = registry.by_id.remove(&id) {
         query::sweep_for_server(id, &results).await;
@@ -579,7 +609,7 @@ pub async fn refresh_openbao_creds(
         ));
     }
 
-    let bao = openbao::OpenBaoClient::from_store(&pool)
+    let bao = openbao::OpenBaoClient::from_store(&pool, &tokens)
         .await?
         .ok_or_else(|| {
             CommandError::OpenBao(

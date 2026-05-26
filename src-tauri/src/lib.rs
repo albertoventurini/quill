@@ -25,7 +25,10 @@ pub fn run() {
             })?;
             logging::init(&app_data_dir);
             let pool = tauri::async_runtime::block_on(store::open(handle))?;
+            let tokens = openbao::TokenStore::default();
+            tauri::async_runtime::block_on(openbao::migrate_plaintext_token(&pool, &tokens));
             app.manage(pool);
+            app.manage(tokens);
             app.manage(registry::ServerRegistry::default());
             app.manage(query::ResultRegistry::default());
             Ok(())
@@ -58,6 +61,7 @@ pub fn run() {
             commands::write_text_file,
             commands::login_openbao,
             commands::clear_openbao_token,
+            commands::openbao_token_status,
             commands::set_setting,
             commands::get_setting,
             commands::get_all_settings,
