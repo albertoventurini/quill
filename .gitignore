@@ -8,3 +8,10 @@ node_modules
 !.env.example
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Local app data — never belongs in the repo. It normally lives in the platform
+# app-data dir, but this guards against it being created or copied into the tree.
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.db
