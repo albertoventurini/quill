@@ -53,11 +53,32 @@ jobs:
             patchelf \
             libssl-dev
 
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
 
       - name: Run Rust tests
-        run: cargo test
+        run: cargo test --locked
         working-directory: src-tauri
 
       - name: Run frontend type-check
         run: pnpm check
+
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rust: RustSec advisories + crates.io-only source allowlist + ban checks.
+      - name: cargo-deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          manifest-path: src-tauri/Cargo.toml
+          command: check advisories bans sources
+
+      # JS: fail only on high/critical advisories; install is frozen to the lockfile.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm audit --audit-level high

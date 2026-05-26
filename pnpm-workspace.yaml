@@ -1,2 +1,7 @@
 allowBuilds:
   esbuild: true
+
+# Supply-chain cooldown: refuse to adopt any package version published less than
+# 7 days (10080 minutes) ago. Skips the window in which a hijacked release is live
+# before being detected and yanked. Tune via minimumReleaseAgeExclude if needed.
+minimumReleaseAge: 10080

@@ -34,7 +34,7 @@ jobs:
             patchelf \
             libssl-dev
 
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
 
       - run: pnpm tauri build
 
@@ -67,7 +67,7 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - run: pnpm install
+      - run: pnpm install --frozen-lockfile
 
       - run: pnpm tauri build
 
