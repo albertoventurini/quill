@@ -138,7 +138,11 @@
       onclick={() => { onNodeClick(); toggleExpand(); }}
     >
       <span class="arrow">{arrow()}</span>
-      <span class="label" class:col-name={node.kind === "column"}>{nodeLabel()}</span>
+      <span
+        class="label label-{node.kind}"
+        class:col-name={node.kind === "column"}
+        class:server-connected={node.kind === "server" && isConnected(node.conn.id)}
+      >{nodeLabel()}</span>
       {#if node.kind === "column"}
         <span class="coltype">{node.typeName}</span>
         {#if node.notNull}<span class="notnull">not null</span>{/if}
@@ -244,6 +248,24 @@
   }
   .label { flex: 1; min-width: 0; }
   .label.col-name { flex: 0 1 auto; }
+
+  /* Per-kind label styling builds a visual hierarchy so structural
+     meta-labels never read like selectable DB objects. */
+  /* Bold only once connected, so connection state is readable at a glance. */
+  .label-server { font-weight: 400; color: var(--text-heading); }
+  .label-server.server-connected { font-weight: 600; }
+  .label-database { color: var(--text-db); }
+  .label-schema { color: var(--text-secondary); }
+  .label-leaf { color: var(--text-primary); }
+  /* Group headers ("Tables", "Views", "Functions", …): uppercase, dimmed
+     and tracked out so they read as section labels, not data. */
+  .label-group {
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-faint);
+  }
   .coltype {
     font-size: 0.8rem;
     color: var(--text-mid);
