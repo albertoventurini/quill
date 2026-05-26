@@ -106,6 +106,17 @@
     }
   }
 
+  // Label shown in the children area once a load resolves with no rows.
+  // Distinct per level so "empty" never reads as "still loading".
+  function emptyLabel(): string {
+    switch (node.kind) {
+      case "server": return "No databases";
+      case "database": return "No schemas";
+      case "schema": return "No tables or functions — right-click to Refresh schema";
+      default: return "Empty";
+    }
+  }
+
   function arrow(): string {
     if (node.kind === "column") return "  ";
     if (node.kind === "leaf") {
@@ -152,14 +163,14 @@
   </div>
 
   {#if "expanded" in node && node.expanded && "children" in node}
-    {#if node.children === null}
-      <!-- not yet loaded; loading spinner above handles feedback -->
-    {:else if node.children.length === 0 && node.kind === "schema" && !node.loading}
-      <div class="children">
-        <span class="empty-hint">No tables or functions — right-click to Refresh schema</span>
-      </div>
-    {:else if node.children.length > 0}
-      <div class="children">
+    <div class="children">
+      {#if ("loading" in node && node.loading) || node.children === null}
+        <span class="status-hint loading-hint">Loading…</span>
+      {:else if "error" in node && node.error}
+        <span class="status-hint error-hint" title={node.error}>Couldn’t load — {node.error}</span>
+      {:else if node.children.length === 0}
+        <span class="status-hint empty-hint">{emptyLabel()}</span>
+      {:else}
         {#each node.children as child (childKey(child))}
           <!-- svelte-ignore svelte_self_deprecated -->
           <svelte:self
@@ -171,8 +182,8 @@
             {onConnectServer}
           />
         {/each}
-      </div>
-    {/if}
+      {/if}
+    </div>
   {/if}
 </div>
 
@@ -249,13 +260,19 @@
   .expiry-warn { color: var(--text-warn, #e6a817); }
   .loading { color: var(--text-muted); font-style: italic; }
   .error { color: var(--text-error); font-weight: bold; cursor: help; }
-  .empty-hint {
+  .status-hint {
     display: block;
     font-size: 0.8rem;
     color: var(--text-muted);
-    font-style: italic;
     padding: 0.15rem 0.3rem;
     user-select: none;
+  }
+  .loading-hint,
+  .empty-hint { font-style: italic; }
+  .error-hint {
+    color: var(--text-error);
+    white-space: normal;
+    word-break: break-word;
   }
   .children {
     padding-left: 1.2rem;
