@@ -34,6 +34,10 @@ pub enum CommandError {
     UnknownConnection(String),
     NotConnected(String),
     Slot(String),
+    /// The server's connection budget is full. The frontend renders this as an
+    /// actionable notice (cancel a running query / retry / raise the budget)
+    /// rather than a Postgres error.
+    BudgetFull(String),
     Pg(String),
     Store(String),
     Introspect(String),
@@ -47,6 +51,7 @@ impl std::fmt::Display for CommandError {
             Self::UnknownConnection(msg)
             | Self::NotConnected(msg)
             | Self::Slot(msg)
+            | Self::BudgetFull(msg)
             | Self::Pg(msg)
             | Self::Store(msg)
             | Self::Introspect(msg)
@@ -466,7 +471,11 @@ fn map_query_err(e: query::QueryError) -> CommandError {
         query::QueryError::UnknownResult => {
             CommandError::Pg("result_id is not open (was it already closed?)".into())
         }
-        query::QueryError::Pg(m) | query::QueryError::Slot(m) => CommandError::Pg(m),
+        query::QueryError::Budget(n) => {
+            CommandError::BudgetFull(format!("all {n} connections are in use"))
+        }
+        query::QueryError::Slot(m) => CommandError::Slot(m),
+        query::QueryError::Pg(m) => CommandError::Pg(m),
     }
 }
 
@@ -938,3 +947,26 @@ pub async fn cancel_query(
 // ═══════════════════════════════════════════════════════════════════════════
 
 // (bare-SELECT tests moved to query/mod.rs)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn budget_error_maps_to_budget_full() {
+        // A full connection budget must surface as its own kind so the frontend
+        // can offer cancel/retry actions instead of showing a Postgres error.
+        match map_query_err(query::QueryError::Budget(2)) {
+            CommandError::BudgetFull(m) => assert!(m.contains('2')),
+            other => panic!("expected BudgetFull, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slot_error_no_longer_masquerades_as_pg() {
+        match map_query_err(query::QueryError::Slot("connect failed".into())) {
+            CommandError::Slot(m) => assert_eq!(m, "connect failed"),
+            other => panic!("expected Slot, got {other:?}"),
+        }
+    }
+}

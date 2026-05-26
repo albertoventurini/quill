@@ -185,6 +185,7 @@ export type CommandError = {
     | "UnknownConnection"
     | "NotConnected"
     | "Slot"
+    | "BudgetFull"
     | "Pg"
     | "Store"
     | "Introspect"

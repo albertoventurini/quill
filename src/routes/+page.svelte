@@ -156,6 +156,64 @@ import { save } from "@tauri-apps/plugin-dialog";
     return `(${s.budget - busy}/${s.budget})`;
   }
 
+  // Slot usage for the budget-full notice, derived from the state already
+  // fetched after every query.
+  function budgetInfo(tab: Tab): { busy: number; budget: number } {
+    const s = connectedState[tab.serverId];
+    return {
+      busy: s ? s.slots.filter((x) => x.busy).length : 0,
+      budget: s ? s.budget : 0,
+    };
+  }
+
+  // Which other tabs hold a slot on this server, and why.  Every busy slot is
+  // held either by an in-flight query (`runningQuery`) or by an open result
+  // cursor (`active.resultId`) — a `CancelRequest` only frees the former, so
+  // the notice must offer the matching remedy for each.
+  function slotHolders(tab: Tab): { running: Tab[]; results: Tab[] } {
+    const others = tabs.filter((t) => t.serverId === tab.serverId && t.id !== tab.id);
+    return {
+      running: others.filter((t) => t.runningQuery),
+      results: others.filter((t) => !!t.active?.resultId),
+    };
+  }
+
+  function heldByText(tab: Tab): string {
+    const h = slotHolders(tab);
+    const parts = [
+      ...h.results.map((t) => `${t.database} — result open`),
+      ...h.running.map((t) => `${t.database} — query running`),
+    ];
+    return parts.join("; ");
+  }
+
+  // Cancel in-flight queries on this server.  Cancellation is out-of-band, so
+  // the slot frees only once the cancelled query's guard drops — poll briefly
+  // so the notice reflects the freed slot.
+  async function cancelHeldQuery(tab: Tab) {
+    try {
+      await api.cancelQuery(tab.serverId, null);
+    } catch (err) {
+      tab.lastError = err as CommandError;
+    }
+    for (let i = 0; i < 20; i++) {
+      await refreshSlotState(tab.serverId);
+      const s = connectedState[tab.serverId];
+      if (s && s.slots.filter((x) => x.busy).length < s.budget) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+  }
+
+  function retryQuery(tab: Tab) {
+    tab.lastError = null;
+    void runFromEditor(buildPayloadFromButton(tab));
+  }
+
+  function raiseBudget(tab: Tab) {
+    const conn = connections.find((c) => c.id === tab.serverId);
+    if (conn) openEditModal(conn);
+  }
+
   // ═════════════════ Add connection (unchanged shape) ═════════════════
 
   function openAddModal() {
@@ -913,7 +971,30 @@ import { save } from "@tauri-apps/plugin-dialog";
       {#if tab.editorWarning}
         <p class="muted inline">{tab.editorWarning}</p>
       {/if}
-      {#if tab.lastError}
+      {#if tab.lastError?.kind === "BudgetFull"}
+        {@const info = budgetInfo(tab)}
+        {@const held = slotHolders(tab)}
+        <div class="inline notice budget-full">
+          <p class="notice-head">
+            Connection budget full ({info.busy} / {info.budget} in use)
+          </p>
+          {#if held.results.length || held.running.length}
+            <p class="notice-sub">Held by: {heldByText(tab)}</p>
+          {/if}
+          <div class="notice-actions">
+            {#if held.running.length}
+              <button class="btn" onclick={() => cancelHeldQuery(tab)}>
+                {held.running.length > 1 ? "Cancel running queries" : "Cancel running query"}
+              </button>
+            {/if}
+            <button class="btn" onclick={() => retryQuery(tab)}>Retry</button>
+          </div>
+          <p class="notice-sub">
+            Or <button class="linklike" onclick={() => raiseBudget(tab)}>raise the slot budget</button>
+            for this connection.
+          </p>
+        </div>
+      {:else if tab.lastError}
         <p class="inline error">
           <span class="err-badge">{tab.lastError.kind}</span>
           {tab.lastError.message}
@@ -1151,6 +1232,25 @@ import { save } from "@tauri-apps/plugin-dialog";
     text-transform: uppercase;
   }
   .error { color: var(--text-error); }
+
+  .inline.notice.budget-full {
+    border: 1px solid var(--text-warning);
+    border-radius: 4px;
+    padding: 0.5rem 0.65rem;
+    font-size: 0.9rem;
+  }
+  .notice-head { margin: 0 0 0.2rem; font-weight: 600; color: var(--text-warning); }
+  .notice-sub { margin: 0.2rem 0 0; color: var(--text-muted); }
+  .notice-actions { display: flex; gap: 0.5rem; margin-top: 0.4rem; }
+  .linklike {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    color: var(--text-warning);
+    text-decoration: underline;
+    cursor: pointer;
+  }
 
   .modal { border: 1px solid var(--border-secondary); border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; background: var(--bg-surface); }
   .modal::backdrop { background: var(--modal-backdrop); }

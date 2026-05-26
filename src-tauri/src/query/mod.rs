@@ -69,8 +69,8 @@ pub struct ChunkResult {
     pub duration_ms_so_far: u64,
 }
 
-/// Errors specific to query execution.  Convert into `CommandError::Pg`
-/// from the Tauri layer.
+/// Errors specific to query execution.  Mapped to `CommandError` variants
+/// by `map_query_err` in the Tauri layer.
 #[derive(Debug, thiserror::Error)]
 pub enum QueryError {
     #[error("incomplete query: SELECT requires a column list")]
@@ -81,6 +81,10 @@ pub enum QueryError {
     Pg(String),
     #[error("{0}")]
     Slot(String),
+    /// The server's connection budget is full — all `n` slots are busy.
+    /// Distinct from `Slot` so the frontend can offer cancel/retry actions.
+    #[error("all {0} connections are in use")]
+    Budget(usize),
 }
 
 impl From<tokio_postgres::Error> for QueryError {
@@ -121,7 +125,11 @@ pub async fn run_query(
         return Err(QueryError::BareSelect);
     }
 
-    let guard = slot_manager.acquire_owned(database).await?;
+    let guard = match slot_manager.acquire_owned(database).await {
+        Ok(g) => g,
+        Err(SlotError::AllBusy(n)) => return Err(QueryError::Budget(n)),
+        Err(e) => return Err(e.into()),
+    };
 
     // Begin transaction + declare cursor.
     let result_id = Uuid::new_v4();
