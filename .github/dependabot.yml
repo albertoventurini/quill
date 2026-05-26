@@ -1,0 +1,56 @@
+# Dependabot configuration — https://docs.github.com/code-security/dependabot
+#
+# This file configures *version updates* (scheduled dependency bumps). Dependabot
+# *alerts* and *security updates* (immediate CVE-fix PRs) are a SEPARATE toggle in the
+# repo's GitHub settings — enable them under: Settings → Code security → Dependabot.
+#
+# The 7-day cooldown mirrors the pnpm `minimumReleaseAge` in pnpm-workspace.yaml: routine
+# bumps wait a week so a hijacked release isn't adopted before it's detected and yanked.
+# Security updates are NOT subject to cooldown, so genuine CVE fixes still land immediately.
+# No auto-merge is configured, so every PR is gated by CI (cargo-deny / pnpm audit / tests)
+# and merged by hand.
+version: 2
+updates:
+  # Rust backend — Cargo.toml / Cargo.lock live in src-tauri/.
+  - package-ecosystem: "cargo"
+    directory: "/src-tauri"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      # Fold minor + patch bumps into one PR; majors arrive individually for review.
+      cargo-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # Frontend — pnpm. Dependabot reads pnpm-lock.yaml under the "npm" ecosystem.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # CI workflow actions — a compromised GitHub Action is a real supply-chain vector.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "chore"
+      include: "scope"
