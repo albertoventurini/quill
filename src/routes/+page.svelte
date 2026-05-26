@@ -597,7 +597,15 @@ import { save } from "@tauri-apps/plugin-dialog";
 
   // ═════════════════ Tab lifecycle ═════════════════
 
+  // "+" opens a tab equivalent to the active one: same server, database, and
+  // schema scope.  Falls back to the tree selection only when no tab is open.
   function addTab() {
+    if (activeTab) {
+      const tab = makeTab(activeTab.serverId, activeTab.database, "", activeTab.schema);
+      tabs.push(tab);
+      activeTabId = tab.id;
+      return;
+    }
     if (!selectedDb) return;
     const tab = makeTab(selectedDb.serverId, selectedDb.database, "");
     tabs.push(tab);
@@ -608,12 +616,17 @@ import { save } from "@tauri-apps/plugin-dialog";
     return connections.find((c) => c.id === serverId)?.default_db ?? "postgres";
   }
 
-  function openInNewTab(serverId: number, database: string, sql: string) {
+  function openInNewTab(
+    serverId: number,
+    database: string,
+    sql: string,
+    schema: string | null = null,
+  ) {
     if (!connections.some((c) => c.id === serverId)) {
       sidePanelError = "This connection has been deleted.";
       return;
     }
-    const tab = makeTab(serverId, database, sql);
+    const tab = makeTab(serverId, database, sql, schema);
     tabs.push(tab);
     activeTabId = tab.id;
   }

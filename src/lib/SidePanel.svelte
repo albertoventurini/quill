@@ -16,7 +16,12 @@
     selectedServerId: number | null;
     height?: number;
     resolveDb: (serverId: number) => string;
-    onOpenInNewTab: (serverId: number, database: string, sql: string) => void;
+    onOpenInNewTab: (
+      serverId: number,
+      database: string,
+      sql: string,
+      schema?: string | null,
+    ) => void;
     onError: (msg: string) => void;
   } = $props();
 
@@ -91,7 +96,7 @@
   // ── Open in new tab ──
 
   async function openHistory(record: HistoryRecord) {
-    onOpenInNewTab(record.server_id, record.database, record.sql);
+    onOpenInNewTab(record.server_id, record.database, record.sql, record.schema);
   }
 
   async function openSaved(record: SavedQuery) {
@@ -223,7 +228,7 @@
             title={r.sql}
           >
             <span class="ts">{formatTs(r.ts)}</span>
-            <span class="db">{r.database}</span>
+            <span class="db">{r.database}{#if r.schema}<span class="schema" title="scoped to {r.schema}">.{r.schema}</span>{/if}</span>
             <span class="sql">{r.ok ? "" : "✕ "}{shortSql(r.sql)}</span>
             <span class="duration">{r.duration_ms}ms</span>
           </button>
@@ -353,6 +358,7 @@
   .row.failed .sql { color: var(--text-error); }
   .ts { color: var(--text-mid); min-width: 7em; }
   .db { color: var(--text-db); min-width: 6em; }
+  .schema { color: var(--text-accent); }
   .sql {
     flex: 1;
     overflow: hidden;

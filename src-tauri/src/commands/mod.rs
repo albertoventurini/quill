@@ -411,6 +411,7 @@ pub async fn run_query(
             let record = NewHistoryRecord {
                 server_id,
                 database: database.clone(),
+                schema: schema.clone(),
                 sql: sql.clone(),
                 duration_ms: run.duration_ms_so_far as i64,
                 ok: true,
@@ -423,6 +424,7 @@ pub async fn run_query(
             let record = NewHistoryRecord {
                 server_id,
                 database: database.clone(),
+                schema: schema.clone(),
                 sql: sql.clone(),
                 duration_ms: start.elapsed().as_millis() as i64,
                 ok: false,

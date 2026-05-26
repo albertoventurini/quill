@@ -152,6 +152,7 @@ export type HistoryRecord = {
   ts: string;
   server_id: number;
   database: string;
+  schema: string | null;
   sql: string;
   duration_ms: number;
   ok: boolean;

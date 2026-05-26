@@ -26,6 +26,10 @@ pub struct HistoryRecord {
     pub ts: String,
     pub server_id: i64,
     pub database: String,
+    /// The schema the originating tab was scoped to (`SET LOCAL search_path`),
+    /// or `None` for a database-level query.  Re-opening from history restores
+    /// this scope.
+    pub schema: Option<String>,
     pub sql: String,
     pub duration_ms: i64,
     /// Stored as INTEGER 0/1 in SQLite; deserialized as bool here.
@@ -38,6 +42,7 @@ pub struct HistoryRecord {
 pub struct NewHistoryRecord {
     pub server_id: i64,
     pub database: String,
+    pub schema: Option<String>,
     pub sql: String,
     pub duration_ms: i64,
     pub ok: bool,
@@ -67,11 +72,12 @@ pub async fn append(pool: &SqlitePool, r: NewHistoryRecord) -> Result<(), Histor
     let mut tx = pool.begin().await?;
 
     sqlx::query(
-        "INSERT INTO query_history (server_id, database, sql, duration_ms, ok, error) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO query_history (server_id, database, schema, sql, duration_ms, ok, error) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(r.server_id)
     .bind(&r.database)
+    .bind(&r.schema)
     .bind(&r.sql)
     .bind(r.duration_ms)
     .bind(r.ok as i32)
@@ -106,7 +112,7 @@ pub async fn list(
 ) -> Result<Vec<HistoryRecord>, HistoryError> {
     let rows = if let Some(sid) = filter.server_id {
         sqlx::query_as::<_, HistoryRecord>(
-            "SELECT id, ts, server_id, database, sql, duration_ms, ok, error \
+            "SELECT id, ts, server_id, database, schema, sql, duration_ms, ok, error \
              FROM query_history \
              WHERE server_id = ? \
              ORDER BY id DESC \
@@ -118,7 +124,7 @@ pub async fn list(
         .await?
     } else {
         sqlx::query_as::<_, HistoryRecord>(
-            "SELECT id, ts, server_id, database, sql, duration_ms, ok, error \
+            "SELECT id, ts, server_id, database, schema, sql, duration_ms, ok, error \
              FROM query_history \
              ORDER BY id DESC \
              LIMIT ?",
@@ -194,6 +200,7 @@ mod tests {
         NewHistoryRecord {
             server_id: sid,
             database: "postgres".into(),
+            schema: None,
             sql: sql.into(),
             duration_ms: 42,
             ok,
@@ -219,6 +226,22 @@ mod tests {
         assert_eq!(rows[0].error.as_deref(), Some("boom"));
         assert_eq!(rows[2].sql, "SELECT 1");
         assert!(rows[2].ok);
+    }
+
+    #[tokio::test]
+    async fn append_then_list_round_trips_schema_scope() {
+        let pool = test_pool().await;
+        let sid = seed_connection(&pool, "srv").await;
+
+        let mut scoped = sample(sid, "SELECT 1", true);
+        scoped.schema = Some("analytics".into());
+        append(&pool, scoped).await.unwrap();
+        append(&pool, sample(sid, "SELECT 2", true)).await.unwrap();
+
+        let rows = list(&pool, 10, HistoryFilter::default()).await.unwrap();
+        // Newest-first: the unscoped row, then the scoped one.
+        assert_eq!(rows[0].schema, None);
+        assert_eq!(rows[1].schema.as_deref(), Some("analytics"));
     }
 
     #[tokio::test]
