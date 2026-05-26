@@ -88,7 +88,28 @@ pub async fn open(app: &tauri::AppHandle) -> Result<SqlitePool, StoreError> {
 
     sqlx::migrate!("./migrations").run(&pool).await?;
 
+    #[cfg(unix)]
+    restrict_permissions(&app_dir, &db_path);
+
     Ok(pool)
+}
+
+/// Keep the local store private to the current user. The app-data dir holds connections,
+/// query history and cached schema (and logs); the OpenBao token itself lives in the OS
+/// keyring, not here, so this is defense-in-depth for the rest. The WAL/SHM siblings can hold
+/// committed data too, hence the best-effort pass over them.
+#[cfg(unix)]
+fn restrict_permissions(app_dir: &std::path::Path, db_path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _ = std::fs::set_permissions(app_dir, std::fs::Permissions::from_mode(0o700));
+    for suffix in ["", "-wal", "-shm"] {
+        let p = db_path.with_file_name(format!(
+            "{}{suffix}",
+            db_path.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
+    }
 }
 
 // ---------------------------------------------------------------------------
