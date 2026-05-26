@@ -1100,6 +1100,13 @@ import { save } from "@tauri-apps/plugin-dialog";
     </label>
     <label class="field">Slot budget<input class="input" type="number" min={1} max={16} bind:value={addForm.slot_budget} /></label>
 
+    <div class="field">
+      Mode
+      <label class="radio"><input type="radio" name="conn-mode" checked disabled /> Read-only</label>
+      <label class="radio"><input type="radio" name="conn-mode" disabled /> Read-write</label>
+      <span class="hint">Read-write isn’t supported yet — all queries run in a read-only transaction.</span>
+    </div>
+
     {#if addForm.credential_source === "openbao"}
       <label class="field">
         Role path
@@ -1277,6 +1284,8 @@ import { save } from "@tauri-apps/plugin-dialog";
   .modal::backdrop { background: var(--modal-backdrop); }
   .add-form { display: flex; flex-direction: column; gap: 0.5rem; }
   .field { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.9rem; }
+  .radio { display: inline-flex; align-items: center; gap: 0.3rem; font-weight: normal; }
+  .hint { color: var(--text-muted); font-size: 0.8rem; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
 
   .muted { color: var(--text-muted); font-style: italic; }

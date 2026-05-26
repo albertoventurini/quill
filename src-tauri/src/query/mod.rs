@@ -1,7 +1,7 @@
 //! Query execution + cursor-based pagination.
 //!
-//! `run_query` opens a server-side cursor inside a transaction, fetches
-//! the first 1000 rows, and stashes the open guard in a [`ResultRegistry`]
+//! `run_query` opens a server-side cursor inside a read-only transaction,
+//! fetches the first 1000 rows, and stashes the open guard in a [`ResultRegistry`]
 //! keyed by UUID.  Subsequent `fetch_more(result_id)` calls fetch the next
 //! chunk; `close_result(result_id)` rolls back the transaction and drops
 //! the guard.
@@ -136,7 +136,10 @@ pub async fn run_query(
     let cursor_name = format!("q_{}", result_id.simple());
 
     let start = Instant::now();
-    guard.batch_execute("BEGIN").await?;
+    // READ ONLY makes v1's read-only guarantee explicit: Postgres rejects any
+    // write outright, rather than relying on the cursor wrapper (which only
+    // accepts SELECT/VALUES) plus the final ROLLBACK to discard it.
+    guard.batch_execute("BEGIN READ ONLY").await?;
 
     // Scope unqualified names to a single schema when the editor was opened
     // against a schema node. `SET LOCAL` is confined to this transaction, so
