@@ -335,6 +335,12 @@
   .resize-handle:hover {
     background: var(--text-accent);
   }
+  /* Zebra striping: even rows get a faint shade; td backgrounds are
+     transparent, so the sticky rownum gutter, selected, and hover cells
+     still paint over the stripe. */
+  tbody tr:nth-child(even) {
+    background: var(--bg-row-stripe);
+  }
   td {
     padding: 0.25rem 0.6rem;
     border-bottom: 1px solid var(--bg-toolbar);
