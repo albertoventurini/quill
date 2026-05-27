@@ -799,6 +799,21 @@ import { save } from "@tauri-apps/plugin-dialog";
     await refreshSlotState(tab.serverId);
   }
 
+  // "Close result" button: release the server-side cursor and its slot but
+  // keep the rows already fetched on screen.  The grid becomes a static
+  // snapshot — the same terminal state a cursor reaches when it runs to
+  // completion (resultId cleared, hasMore false).  Discarding the fetched rows
+  // here was a bug: closing a >1000-row cursor wiped results the user had
+  // already pulled down.
+  async function closeResultKeepRows(tab: Tab | null = activeTab) {
+    if (!tab || !tab.active?.resultId) return;
+    const rid = tab.active.resultId;
+    tab.active.resultId = "";
+    tab.active.hasMore = false;
+    try { await api.closeResult(rid); } catch {}
+    await refreshSlotState(tab.serverId);
+  }
+
   async function cancelRunning() {
     const tab = activeTab;
     if (!tab) return;
@@ -975,11 +990,11 @@ import { save } from "@tauri-apps/plugin-dialog";
         <button class="btn" onclick={() => runFromEditor(buildPayloadFromButton(tab))} disabled={!canRun(tab)}>
           {tab.runningQuery ? "Running…" : "Run (Ctrl/Cmd+Enter)"}
         </button>
-        <button class="btn" onclick={cancelRunning} disabled={!tab.runningQuery && !tab.active}>
+        <button class="btn" onclick={cancelRunning} disabled={!tab.runningQuery && !tab.active?.resultId}>
           Cancel
         </button>
-        {#if tab.active}
-          <button class="btn" onclick={() => closeActive(tab)}>Close result</button>
+        {#if tab.active?.resultId}
+          <button class="btn" onclick={() => closeResultKeepRows(tab)}>Close result</button>
         {/if}
         <button class="btn" onclick={openSaveDialog} disabled={!tab.sql.trim()}>Save…</button>
       </div>
