@@ -3,6 +3,7 @@
   //! the parent, which owns the tab list.
 
   import type { Tab } from "./tabs";
+  import { serverColor } from "./serverColor";
 
   let {
     tabs,
@@ -36,6 +37,18 @@
     return t.sql !== t.initialSql;
   }
 
+  /** Full path for the hover tooltip — the label itself only shows the
+   *  capped `db.schema`, so the tooltip carries the complete context. */
+  function tabTitle(t: Tab): string {
+    const path = t.schema
+      ? `${serverNameLookup(t.serverId)} / ${t.database} . ${t.schema}`
+      : `${serverNameLookup(t.serverId)} / ${t.database}`;
+    const lines = [path];
+    if (t.schema) lines.push(`search_path → ${t.schema}`);
+    lines.push("Right-click to change database");
+    return lines.join("\n");
+  }
+
   function onTabContextMenu(e: MouseEvent, id: number) {
     e.preventDefault();
     // M5.3 ships only one menu action.  When more land (M5.4 may want
@@ -63,17 +76,21 @@
       role="tab"
       tabindex={isActive ? 0 : -1}
       aria-selected={isActive}
+      style="--server-color: {serverColor(t.serverId)}"
       onclick={() => onSelect(t.id)}
       onauxclick={(e) => onMiddleClick(e, t.id)}
       oncontextmenu={(e) => onTabContextMenu(e, t.id)}
       onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(t.id); } }}
-      title="Right-click to change database"
+      title={tabTitle(t)}
     >
-      <span class="server">{serverNameLookup(t.serverId)}</span>
-      <span class="sep">/</span>
-      <span class="db">{t.database}</span>
-      {#if t.schema}<span class="sep">.</span><span class="schema" title="search_path scoped to {t.schema}">{t.schema}</span>{/if}
-      {#if dirty(t)}<span class="dirty" aria-label="unsaved">•</span>{/if}
+      <span class="accent" aria-hidden="true"></span>
+      <span class="labels">
+        <span class="server">{serverNameLookup(t.serverId)}</span>
+        <span class="path">
+          <span class="path-text"><span class="db">{t.database}</span>{#if t.schema}<span class="sep">.</span><span class="schema">{t.schema}</span>{/if}</span>
+          {#if dirty(t)}<span class="dirty" aria-label="unsaved">•</span>{/if}
+        </span>
+      </span>
       <button
         class="close"
         aria-label="Close tab"
@@ -95,37 +112,75 @@
   }
   .tab {
     display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    padding: 0.35rem 0.6rem;
+    align-items: stretch;
     border-right: 1px solid var(--border-light);
+    border-bottom: 2px solid transparent;
     cursor: pointer;
-    font-size: 0.85rem;
     user-select: none;
-    white-space: nowrap;
   }
   .tab:hover { background: var(--bg-hover); }
-  .tab.active { background: var(--bg-surface); border-bottom: 2px solid var(--text-accent); }
-  .server { color: var(--text-primary); font-weight: 500; }
+  .tab.active { background: var(--bg-surface); border-bottom-color: var(--text-accent); }
+
+  /* Per-server colour bar (see serverColor.ts). */
+  .accent {
+    flex: none;
+    width: 3px;
+    align-self: stretch;
+    background: var(--server-color, transparent);
+  }
+
+  .labels {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.05rem;
+    padding: 0.2rem 0.5rem;
+    min-width: 0;
+    max-width: 15rem;
+  }
+  .server {
+    font-size: 0.68rem;
+    line-height: 1.15;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .path {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    font-size: 0.8rem;
+    line-height: 1.2;
+  }
+  .path-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .sep { color: var(--text-faint); }
   .schema { color: var(--text-accent); font-weight: 500; }
+  .db { color: var(--text-primary); font-weight: 500; }
   /* Muted = the tab matches the tree's current selection. */
-  .tab.muted .server, .tab.muted .db { color: var(--text-muted); }
+  .tab.muted .server { color: var(--text-faint); }
+  .tab.muted .db { color: var(--text-muted); }
   .tab:not(.muted) .db { color: var(--text-orange); font-weight: 600; }
-  .dirty { color: var(--text-orange); padding-left: 0.15rem; }
+  .dirty { flex: none; color: var(--text-orange); padding-left: 0.2rem; }
   .close {
-    margin-left: 0.4rem;
+    align-self: center;
+    margin: 0 0.3rem 0 0.1rem;
     background: transparent;
     border: none;
     cursor: pointer;
-    font-size: 1rem;
+    font-size: 0.95rem;
     line-height: 1;
-    padding: 0 0.25rem;
+    padding: 0 0.2rem;
     color: var(--text-muted);
   }
   .close:hover { color: var(--text-error); background: var(--close-hover-bg); border-radius: 2px; }
   .add {
-    padding: 0.35rem 0.6rem;
+    padding: 0 0.6rem;
     background: transparent;
     border: none;
     cursor: pointer;
