@@ -19,7 +19,7 @@
   import { searchKeymap } from "@codemirror/search";
   import { bracketMatching, indentOnInput, syntaxHighlighting, defaultHighlightStyle, HighlightStyle } from "@codemirror/language";
   import { tags } from "@lezer/highlight";
-  import { autocompletion } from "@codemirror/autocomplete";
+  import { autocompletion, completionKeymap, acceptCompletion } from "@codemirror/autocomplete";
 
   import { statementAtCursor } from "./statement";
   import { makeCompletionSource, type EditorContext } from "./completion";
@@ -122,8 +122,19 @@
           override: [makeCompletionSource(getContext)],
           closeOnBlur: true,
           activateOnTyping: true,
+          // We supply our own completion keymap below (Tab to accept, no
+          // Enter) instead of CodeMirror's default Enter-accepts binding.
+          defaultKeymap: false,
         }),
         keymap.of([
+          // Completion controls go first so they win over the default
+          // cursor-movement / newline bindings while the panel is open.
+          // Enter is intentionally absent: it always inserts a newline, so a
+          // panel that opens uninvited (e.g. while typing a table alias)
+          // never hijacks the keystroke. Tab accepts; with no panel open it
+          // falls through to indentWithTab.
+          ...completionKeymap.filter((k) => k.key !== "Enter"),
+          { key: "Tab", run: acceptCompletion },
           ...defaultKeymap.filter((k) => k.key !== "Mod-Enter"),
           ...historyKeymap,
           ...searchKeymap,
