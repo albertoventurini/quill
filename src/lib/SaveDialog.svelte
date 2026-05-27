@@ -95,7 +95,7 @@
 </dialog>
 
 <style>
-  .modal { border: 1px solid var(--border-secondary); border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; background: var(--bg-surface); }
+  .modal { border: 1px solid var(--border-secondary); border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; background: var(--bg-surface); color: var(--text-primary); }
   .modal::backdrop { background: var(--modal-backdrop); }
   .save-form { display: flex; flex-direction: column; gap: 0.75rem; }
   .field { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.9rem; }
@@ -103,7 +103,7 @@
   .scope { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; border: 1px solid var(--border-light); padding: 0.5rem; border-radius: 4px; }
   .scope legend { padding: 0 0.25rem; color: var(--text-secondary); }
   .modal-actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
-  .btn { padding: 0.3rem 0.6rem; border: 1px solid var(--border-secondary); border-radius: 4px; background: var(--btn-bg); cursor: pointer; font: inherit; font-size: 0.9rem; }
+  .btn { padding: 0.3rem 0.6rem; border: 1px solid var(--border-secondary); border-radius: 4px; background: var(--btn-bg); color: var(--text-primary); cursor: pointer; font: inherit; font-size: 0.9rem; }
   .btn:hover { background: var(--btn-hover); }
   .btn-primary { background: var(--btn-primary-bg); color: var(--btn-primary-text); border-color: var(--btn-primary-border); }
   .btn-primary:hover { background: var(--btn-primary-hover); }

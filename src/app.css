@@ -7,6 +7,8 @@
  */
 
 :root {
+  color-scheme: light;
+
   /* Backgrounds */
   --bg-app: #f0f0f0;
   --bg-surface: white;
@@ -72,6 +74,8 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
+    color-scheme: dark;
+
     /* Backgrounds */
     --bg-app: #1e1e1e;
     --bg-surface: #252526;
@@ -137,6 +141,8 @@
 }
 
 [data-theme="light"] {
+  color-scheme: light;
+
   /* Backgrounds */
   --bg-app: #f0f0f0;
   --bg-surface: white;
@@ -201,6 +207,8 @@
 }
 
 [data-theme="dark"] {
+  color-scheme: dark;
+
   /* Backgrounds */
   --bg-app: #1e1e1e;
   --bg-surface: #252526;

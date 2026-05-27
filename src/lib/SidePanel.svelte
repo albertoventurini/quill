@@ -327,6 +327,7 @@
     border: 1px solid var(--border-light);
     border-radius: 99px;
     background: var(--bg-surface);
+    color: var(--text-primary);
     cursor: pointer;
     font-size: 0.75rem;
   }
@@ -352,6 +353,7 @@
     font: inherit;
     font-size: 0.8rem;
     font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
   }
   .row:hover { background: var(--bg-row-hover); }
   .row.failed { color: var(--text-error); }
@@ -389,6 +391,7 @@
     text-align: left;
     padding: 0.1rem 0;
     overflow: hidden;
+    color: var(--text-primary);
   }
   .scope { font-size: 0.85rem; }
   .name { font-weight: 600; min-width: 8em; }
@@ -430,6 +433,7 @@
     padding: 1.25rem;
     max-width: 360px;
     background: var(--bg-surface);
+    color: var(--text-primary);
   }
   .modal::backdrop { background: var(--modal-backdrop); }
   .modal-actions {
@@ -443,6 +447,7 @@
     border: 1px solid var(--text-muted);
     border-radius: 4px;
     background: var(--btn-bg);
+    color: var(--text-primary);
     cursor: pointer;
     font: inherit;
     font-size: 0.9rem;

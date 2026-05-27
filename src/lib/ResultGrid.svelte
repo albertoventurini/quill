@@ -310,6 +310,7 @@
     font: inherit;
     font-size: 0.85rem;
     text-align: left;
+    color: var(--text-primary);
   }
   .header-button:hover {
     background: var(--bg-hover);
@@ -428,6 +429,7 @@
     cursor: pointer;
     font: inherit;
     font-size: 0.9rem;
+    color: var(--text-primary);
   }
   .menu-item:hover { background: var(--bg-accent-light); }
 </style>

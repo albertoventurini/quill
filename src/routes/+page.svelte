@@ -1235,11 +1235,11 @@ import { save } from "@tauri-apps/plugin-dialog";
   .right-pane { flex: 1; min-width: 0; min-height: 0; padding: 1rem; overflow: hidden; display: flex; flex-direction: column; gap: 0.5rem; }
 
   .header-row { display: flex; align-items: center; justify-content: space-between; }
-  h2, h3 { margin: 0; font-size: 1.05rem; }
+  h2, h3 { margin: 0; font-size: 1.05rem; color: var(--text-heading); }
 
   .tree { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
 
-  .btn { padding: 0.3rem 0.6rem; border: 1px solid var(--btn-border); border-radius: 4px; background: var(--btn-bg); cursor: pointer; font: inherit; font-size: 0.9rem; }
+  .btn { padding: 0.3rem 0.6rem; border: 1px solid var(--btn-border); border-radius: 4px; background: var(--btn-bg); color: var(--text-primary); cursor: pointer; font: inherit; font-size: 0.9rem; }
   .btn:hover { background: var(--btn-hover); }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn-primary { background: var(--btn-primary-bg); color: var(--btn-primary-text); border-color: var(--btn-primary-border); }
@@ -1281,7 +1281,7 @@ import { save } from "@tauri-apps/plugin-dialog";
     cursor: pointer;
   }
 
-  .modal { border: 1px solid var(--border-secondary); border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; background: var(--bg-surface); }
+  .modal { border: 1px solid var(--border-secondary); border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; background: var(--bg-surface); color: var(--text-primary); }
   .modal::backdrop { background: var(--modal-backdrop); }
   .add-form { display: flex; flex-direction: column; gap: 0.5rem; }
   .field { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.9rem; }
@@ -1326,6 +1326,7 @@ import { save } from "@tauri-apps/plugin-dialog";
     cursor: pointer;
     font: inherit;
     font-size: 0.9rem;
+    color: var(--text-primary);
   }
   .menu-item:hover { background: var(--bg-accent-light); }
 </style>
