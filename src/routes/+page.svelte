@@ -12,7 +12,7 @@
   import Editor from "$lib/Editor.svelte";
   import { statementAtCursor } from "$lib/statement";
   import Tree from "$lib/Tree.svelte";
-  import type { ServerNode, TreeNode, DatabaseNode } from "$lib/tree";
+  import type { ServerNode, TreeNode, DatabaseNode, LeafNode } from "$lib/tree";
   import { clearDatabaseSubtree, errorMessage, loadDatabases } from "$lib/tree";
   import { clearServerSchemaPayloads } from "$lib/schemaStore";
 import Tabs from "$lib/Tabs.svelte";
@@ -487,6 +487,27 @@ import { save } from "@tauri-apps/plugin-dialog";
     activeTabId = tab.id;
   }
 
+  /** Open a fresh editor tab pre-filled with `sql` and run it immediately.
+   *  Used by the relation context-menu "SELECT *" preview actions. */
+  function openQueryAndRun(
+    serverId: number,
+    database: string,
+    sql: string,
+    schema: string | null,
+  ) {
+    if (!connections.some((c) => c.id === serverId)) {
+      sidePanelError = "This connection has been deleted.";
+      return;
+    }
+    selectedDb = { serverId, database };
+    const tab = makeTab(serverId, database, sql, schema);
+    tabs.push(tab);
+    activeTabId = tab.id;
+    // activeTab derives from the assignments above, so runFromEditor targets
+    // this new tab.
+    void runFromEditor(statementAtCursor(sql, sql.length, { from: sql.length, to: sql.length }));
+  }
+
   let selectedConn = $derived(
     selectedDb ? connections.find((c) => c.id === selectedDb!.serverId) ?? null : null,
   );
@@ -516,6 +537,16 @@ import { save } from "@tauri-apps/plugin-dialog";
           openQueryEditor(target.serverId, target.database, target.name);
         }
         break;
+      case "select-preview":
+      case "select-all":
+        if (target.kind === "leaf") {
+          const rel = `${quoteIdent(target.schema)}.${quoteIdent(target.name)}`;
+          const sql = action === "select-preview"
+            ? `SELECT * FROM ${rel} LIMIT 100`
+            : `SELECT * FROM ${rel}`;
+          openQueryAndRun(target.serverId, target.database, sql, target.schema);
+        }
+        break;
       case "connect":
         if (target.kind === "server") connectServer(target.conn.id);
         break;
@@ -540,6 +571,19 @@ import { save } from "@tauri-apps/plugin-dialog";
         if (target.kind === "server") await deleteConn(target.conn.id);
         break;
     }
+  }
+
+  /** Double-quote a Postgres identifier (escaping embedded quotes) so names
+   *  with mixed case or special characters resolve in generated SQL. */
+  function quoteIdent(s: string): string {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+
+  /** Relation leaves (table/view/matview/partitioned table) can be previewed
+   *  with a generated SELECT; functions and friends cannot. */
+  function isRelationLeaf(kind: LeafNode["leafKind"]): boolean {
+    return kind === "table" || kind === "view"
+      || kind === "matview" || kind === "partitioned_table";
   }
 
   function qualifiedName(t: TreeNode): string {
@@ -583,6 +627,10 @@ import { save } from "@tauri-apps/plugin-dialog";
       items.push({ action: "refresh", label: "Refresh schema" });
       items.push({ action: "copy-name", label: "Copy qualified name" });
     } else if (t.kind === "leaf") {
+      if (isRelationLeaf(t.leafKind) && isConnected(t.serverId)) {
+        items.push({ action: "select-preview", label: "SELECT * (first 100 rows)" });
+        items.push({ action: "select-all", label: "SELECT * (no limit)" });
+      }
       items.push({ action: "refresh", label: "Refresh schema" });
       items.push({ action: "copy-name", label: "Copy qualified name" });
     } else if (t.kind === "column") {
