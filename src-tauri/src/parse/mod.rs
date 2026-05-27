@@ -516,6 +516,10 @@ fn is_token_in_from_clause(stmt_tokens: &[Atok], idx: usize, _depth: i32) -> boo
                 if is_from_keyword(w) {
                     return true;
                 }
+                // ON / USING open a join *condition* — a boolean expression
+                // over the joined tables. Hitting one before any FROM/JOIN
+                // keyword means the qualifier is a column reference (alias.col),
+                // not a schema-qualified relation.
                 if matches!(
                     w.keyword,
                     sqlparser::keywords::Keyword::WHERE
@@ -525,6 +529,8 @@ fn is_token_in_from_clause(stmt_tokens: &[Atok], idx: usize, _depth: i32) -> boo
                         | sqlparser::keywords::Keyword::HAVING
                         | sqlparser::keywords::Keyword::LIMIT
                         | sqlparser::keywords::Keyword::OFFSET
+                        | sqlparser::keywords::Keyword::ON
+                        | sqlparser::keywords::Keyword::USING
                 ) {
                     return false;
                 }
@@ -641,21 +647,22 @@ fn walk_table_list(tokens: &[Atok], mut i: usize, max_depth: i32) -> Vec<ScopeTa
                     continue;
                 }
 
-                // A potential relation name. Only accept non-keyword identifiers
-                // (or quoted identifiers).
-                if matches!(w.keyword, Keyword::NoKeyword) || w.quote_style.is_some() {
-                    let (schema, name, alias) = read_relation(tokens, &mut i, len, base_depth);
-                    if let Some(name) = name {
-                        tables.push(ScopeTable {
-                            schema,
-                            name,
-                            alias,
-                        });
-                    }
-                    continue;
+                // Any word reaching here sits in table-name position: every
+                // structural keyword (FROM/JOIN/ON/USING/AS, plus stop and
+                // clause keywords) was consumed by the branches above. Postgres
+                // lets non-reserved keywords (`action`, `name`, `type`,
+                // `value`, …) be unquoted table names, so accept them too.
+                // Restricting to `NoKeyword` dropped such tables and misread
+                // the following alias as the relation name.
+                let (schema, name, alias) = read_relation(tokens, &mut i, len, base_depth);
+                if let Some(name) = name {
+                    tables.push(ScopeTable {
+                        schema,
+                        name,
+                        alias,
+                    });
                 }
-
-                i += 1;
+                continue;
             }
 
             Token::Comma => {
@@ -1061,6 +1068,87 @@ mod tests {
         let c = ctx("SELECT * FROM users, |");
         assert_eq!(c.kind, CompletionKind::FromItem);
         assert_eq!(c.prefix, "");
+    }
+
+    #[test]
+    fn keyword_named_table_is_read_with_its_alias() {
+        // Regression: `action` is Keyword::ACTION in sqlparser. Restricting
+        // scope extraction to NoKeyword words dropped the table and misread
+        // its alias `a` as the relation name, so `a.` resolved to nothing.
+        let c = ctx("SELECT * FROM action a LEFT JOIN action_ban_actor aba ON aba.id = a.|");
+        assert_eq!(c.kind, CompletionKind::QualifiedColumn);
+        assert_eq!(c.qualifier.as_deref(), Some("a"));
+        assert_eq!(
+            c.scope_tables,
+            vec![
+                ScopeTable {
+                    schema: None,
+                    name: "action".into(),
+                    alias: Some("a".into())
+                },
+                ScopeTable {
+                    schema: None,
+                    name: "action_ban_actor".into(),
+                    alias: Some("aba".into())
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn keyword_named_table_without_alias_keeps_its_name() {
+        let c = ctx("SELECT | FROM action");
+        assert_eq!(
+            c.scope_tables,
+            vec![ScopeTable {
+                schema: None,
+                name: "action".into(),
+                alias: None
+            }],
+        );
+    }
+
+    #[test]
+    fn alias_qualifier_in_on_clause_is_qualified_column() {
+        // Regression: a `ts.` inside an ON condition must resolve as a
+        // column qualifier, not a schema-qualified relation. Walking back
+        // from `ts` hits JOIN before any stop keyword, so without treating
+        // ON as a boundary this was misclassified as QualifiedRelation.
+        let c = ctx("SELECT * FROM \"schema_a\".\"trust_status\" ts \
+             LEFT JOIN tiko_connector tc ON ts.|uuid = tc.uuid");
+        assert_eq!(c.kind, CompletionKind::QualifiedColumn);
+        assert_eq!(c.qualifier.as_deref(), Some("ts"));
+        assert_eq!(
+            c.scope_tables,
+            vec![
+                ScopeTable {
+                    schema: Some("schema_a".into()),
+                    name: "trust_status".into(),
+                    alias: Some("ts".into())
+                },
+                ScopeTable {
+                    schema: None,
+                    name: "tiko_connector".into(),
+                    alias: Some("tc".into())
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn second_alias_qualifier_in_on_clause_is_qualified_column() {
+        let c = ctx("SELECT * FROM users u JOIN orders o ON u.id = o.|");
+        assert_eq!(c.kind, CompletionKind::QualifiedColumn);
+        assert_eq!(c.qualifier.as_deref(), Some("o"));
+    }
+
+    #[test]
+    fn schema_qualified_relation_after_on_clause_still_qualified_relation() {
+        // A genuine schema-qualified relation in a *subsequent* JOIN target
+        // must remain QualifiedRelation: walking back hits JOIN before ON.
+        let c = ctx("SELECT * FROM a JOIN b ON a.x = b.y JOIN common.|");
+        assert_eq!(c.kind, CompletionKind::QualifiedRelation);
+        assert_eq!(c.qualifier.as_deref(), Some("common"));
     }
 
     #[test]
