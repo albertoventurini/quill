@@ -255,8 +255,13 @@
   .label-server { font-weight: 400; color: var(--text-heading); }
   .label-server.server-connected { font-weight: 600; }
   .label-database { color: var(--text-db); }
-  .label-schema { color: var(--text-secondary); }
-  .label-leaf { color: var(--text-primary); }
+  /* Schema, table and column all use the primary text colour; the hierarchy
+     reads from indentation, the dimmed group headers, and the coloured
+     database/server rows above — not from per-level shading. Weight stays the
+     server-connected cue; the font is sans-serif throughout. */
+  .label-schema,
+  .label-leaf,
+  .label-column { color: var(--text-primary); }
   /* Group headers ("Tables", "Views", "Functions", …): uppercase, dimmed
      and tracked out so they read as section labels, not data. */
   .label-group {
