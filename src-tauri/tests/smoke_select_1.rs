@@ -333,6 +333,47 @@ async fn pg_row_to_json_maps_text_correctly() {
 }
 
 #[tokio::test]
+async fn pg_row_to_json_maps_enum_correctly() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    // Idempotent: skip the CREATE TYPE if the test has already been run
+    // against this database.
+    client
+        .batch_execute(
+            "DO $$ BEGIN
+                CREATE TYPE quill_test_mood AS ENUM ('sad', 'ok', 'happy');
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $$;",
+        )
+        .await
+        .expect("create enum type");
+
+    let rows = client
+        .query("SELECT 'happy'::quill_test_mood AS m", &[])
+        .await
+        .expect("SELECT enum");
+
+    let values = quill_lib::commands::pg_row_to_json(&rows[0]);
+    assert_eq!(values.len(), 1, "should have 1 column");
+    match &values[0] {
+        serde_json::Value::String(s) => assert_eq!(s, "happy"),
+        other => panic!("expected String(\"happy\"), got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn pg_row_to_json_maps_null_correctly() {
     let Some(dsn) = dsn() else {
         skip_note();

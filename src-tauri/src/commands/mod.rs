@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::time::{Duration, SystemTime};
 use tauri::State;
 use tokio_postgres::Row;
-use tokio_postgres::types::Type;
+use tokio_postgres::types::{FromSql, Kind, Type};
 
 use crate::openbao;
 use crate::pg::PgConnector;
@@ -128,7 +128,8 @@ pub fn pg_row_to_json(row: &Row) -> Vec<Value> {
     let mut values = Vec::with_capacity(columns.len());
 
     for (i, col) in columns.iter().enumerate() {
-        let val = match *col.type_() {
+        let ty = col.type_();
+        let val = match *ty {
             Type::BOOL => option_to_json(row.try_get::<_, Option<bool>>(i), Value::Bool),
             Type::INT2 => option_to_json(row.try_get::<_, Option<i16>>(i), |v| {
                 Value::Number((v as i64).into())
@@ -193,17 +194,46 @@ pub fn pg_row_to_json(row: &Row) -> Vec<Value> {
                 })
             }
 
-            // Unknown — best-effort &str fallback.
-            _ => match row.try_get::<_, Option<&str>>(i) {
-                Ok(Some(s)) => Value::String(s.to_string()),
-                Ok(None) => Value::Null,
-                Err(_) => Value::Null,
-            },
+            _ => {
+                // User-defined enums arrive as their UTF-8 label on the wire
+                // but `&str`'s FromSql only accepts text-family OIDs, so they
+                // would otherwise fall into the best-effort branch and decode
+                // as NULL.
+                if matches!(ty.kind(), Kind::Enum(_)) {
+                    option_to_json(row.try_get::<_, Option<PgEnumLabel>>(i), |v| {
+                        Value::String(v.0)
+                    })
+                } else {
+                    // Unknown — best-effort &str fallback.
+                    match row.try_get::<_, Option<&str>>(i) {
+                        Ok(Some(s)) => Value::String(s.to_string()),
+                        Ok(None) | Err(_) => Value::Null,
+                    }
+                }
+            }
         };
         values.push(val);
     }
 
     values
+}
+
+/// Decodes any Postgres enum value as its UTF-8 label.  `&str`'s `FromSql`
+/// rejects non-text OIDs, so we need a wrapper whose `accepts` claims every
+/// `Kind::Enum` type.
+struct PgEnumLabel(String);
+
+impl<'a> FromSql<'a> for PgEnumLabel {
+    fn from_sql(
+        _: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(PgEnumLabel(std::str::from_utf8(raw)?.to_owned()))
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        matches!(ty.kind(), Kind::Enum(_))
+    }
 }
 
 /// Tiny helper: collapse `Result<Option<T>, _>` into `serde_json::Value`
