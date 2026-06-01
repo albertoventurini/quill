@@ -143,16 +143,8 @@ pub fn pg_row_to_json(row: &Row) -> Vec<Value> {
             Type::OID => option_to_json(row.try_get::<_, Option<u32>>(i), |v| {
                 Value::Number((v as i64).into())
             }),
-            Type::FLOAT4 => option_to_json(row.try_get::<_, Option<f32>>(i), |v| {
-                serde_json::Number::from_f64(v as f64)
-                    .map(Value::Number)
-                    .unwrap_or(Value::Null)
-            }),
-            Type::FLOAT8 => option_to_json(row.try_get::<_, Option<f64>>(i), |v| {
-                serde_json::Number::from_f64(v)
-                    .map(Value::Number)
-                    .unwrap_or(Value::Null)
-            }),
+            Type::FLOAT4 => option_to_json(row.try_get::<_, Option<f32>>(i), |v| f64_num(v as f64)),
+            Type::FLOAT8 => option_to_json(row.try_get::<_, Option<f64>>(i), f64_num),
 
             Type::JSON | Type::JSONB => option_to_json(row.try_get::<_, Option<Value>>(i), |v| v),
 
@@ -194,23 +186,74 @@ pub fn pg_row_to_json(row: &Row) -> Vec<Value> {
                 })
             }
 
-            _ => {
-                // User-defined enums arrive as their UTF-8 label on the wire
-                // but `&str`'s FromSql only accepts text-family OIDs, so they
-                // would otherwise fall into the best-effort branch and decode
-                // as NULL.
-                if matches!(ty.kind(), Kind::Enum(_)) {
-                    option_to_json(row.try_get::<_, Option<PgEnumLabel>>(i), |v| {
-                        Value::String(v.0)
-                    })
-                } else {
-                    // Unknown — best-effort &str fallback.
-                    match row.try_get::<_, Option<&str>>(i) {
-                        Ok(Some(s)) => Value::String(s.to_string()),
-                        Ok(None) | Err(_) => Value::Null,
+            _ => match ty.kind() {
+                // User-defined enums arrive as their UTF-8 label on the wire but
+                // `&str`'s FromSql only accepts text-family OIDs, so they would
+                // otherwise decode as NULL.
+                Kind::Enum(_) => option_to_json(row.try_get::<_, Option<PgEnumLabel>>(i), |v| {
+                    Value::String(v.0)
+                }),
+
+                // Arrays decode element-by-element into a JSON array (NULL
+                // elements become Value::Null).
+                Kind::Array(inner) => match *inner {
+                    Type::BOOL => array_to_json::<bool, _>(row, i, Value::Bool),
+                    Type::INT2 => {
+                        array_to_json::<i16, _>(row, i, |v| Value::Number((v as i64).into()))
                     }
-                }
-            }
+                    Type::INT4 => {
+                        array_to_json::<i32, _>(row, i, |v| Value::Number((v as i64).into()))
+                    }
+                    Type::INT8 => array_to_json::<i64, _>(row, i, |v| Value::Number(v.into())),
+                    Type::OID => {
+                        array_to_json::<u32, _>(row, i, |v| Value::Number((v as i64).into()))
+                    }
+                    Type::FLOAT4 => array_to_json::<f32, _>(row, i, |v| f64_num(v as f64)),
+                    Type::FLOAT8 => array_to_json::<f64, _>(row, i, f64_num),
+                    Type::UUID => {
+                        array_to_json::<uuid::Uuid, _>(row, i, |u| Value::String(u.to_string()))
+                    }
+                    Type::NUMERIC => array_to_json::<rust_decimal::Decimal, _>(row, i, |d| {
+                        Value::String(d.to_string())
+                    }),
+                    Type::DATE => array_to_json::<chrono::NaiveDate, _>(row, i, |d| {
+                        Value::String(d.to_string())
+                    }),
+                    Type::TIME => array_to_json::<chrono::NaiveTime, _>(row, i, |t| {
+                        Value::String(t.to_string())
+                    }),
+                    Type::TIMESTAMP => array_to_json::<chrono::NaiveDateTime, _>(row, i, |t| {
+                        Value::String(t.to_string())
+                    }),
+                    Type::TIMESTAMPTZ => {
+                        array_to_json::<chrono::DateTime<chrono::Utc>, _>(row, i, |t| {
+                            Value::String(t.to_rfc3339())
+                        })
+                    }
+                    Type::JSON | Type::JSONB => array_to_json::<Value, _>(row, i, |v| v),
+                    Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME | Type::CHAR => {
+                        array_to_json::<&str, _>(row, i, |s| Value::String(s.to_string()))
+                    }
+                    _ if matches!(inner.kind(), Kind::Enum(_)) => {
+                        array_to_json::<PgEnumLabel, _>(row, i, |v| Value::String(v.0))
+                    }
+                    _ => unsupported(ty),
+                },
+
+                // Anything else: best-effort text, otherwise an honest
+                // "unsupported" marker the frontend renders distinctly from a
+                // real NULL. `&str` returns Err (not Ok(None)) for a genuine
+                // NULL of a non-text type, so we probe presence separately to
+                // avoid mislabelling NULL as unsupported.
+                _ => match row.try_get::<_, Option<&str>>(i) {
+                    Ok(Some(s)) => Value::String(s.to_string()),
+                    Ok(None) => Value::Null,
+                    Err(_) => match row.try_get::<_, Option<PgPresence>>(i) {
+                        Ok(None) => Value::Null,
+                        Ok(Some(_)) | Err(_) => unsupported(ty),
+                    },
+                },
+            },
         };
         values.push(val);
     }
@@ -224,15 +267,62 @@ pub fn pg_row_to_json(row: &Row) -> Vec<Value> {
 struct PgEnumLabel(String);
 
 impl<'a> FromSql<'a> for PgEnumLabel {
-    fn from_sql(
-        _: &Type,
-        raw: &'a [u8],
-    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+    fn from_sql(_: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
         Ok(PgEnumLabel(std::str::from_utf8(raw)?.to_owned()))
     }
 
     fn accepts(ty: &Type) -> bool {
         matches!(ty.kind(), Kind::Enum(_))
+    }
+}
+
+/// Accepts any type; used only to tell a genuine SQL NULL (`Ok(None)`) apart
+/// from a present-but-undecodable value (`Ok(Some(_))`) in the unsupported
+/// fallback.  It deliberately keeps no data — binary wire formats wouldn't be
+/// human-readable anyway.
+struct PgPresence;
+
+impl<'a> FromSql<'a> for PgPresence {
+    fn from_sql(_: &Type, _: &'a [u8]) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(PgPresence)
+    }
+
+    fn accepts(_: &Type) -> bool {
+        true
+    }
+}
+
+/// Marker for a value whose Postgres type Quill can't render.  The frontend
+/// recognises the `__quill_unsupported__` key and shows `«type» (unsupported)`
+/// instead of a misleading NULL.
+fn unsupported(ty: &Type) -> Value {
+    serde_json::json!({ "__quill_unsupported__": ty.name() })
+}
+
+/// Convert an `f64` to a JSON number, falling back to NULL for non-finite
+/// values (NaN / ±∞ have no JSON representation).
+fn f64_num(v: f64) -> Value {
+    serde_json::Number::from_f64(v)
+        .map(Value::Number)
+        .unwrap_or(Value::Null)
+}
+
+/// Decode a Postgres array column as a JSON array, mapping each element with
+/// `f` (NULL elements become `Value::Null`).  Decode failure / SQL NULL both
+/// collapse to `Value::Null`, matching [`option_to_json`].
+fn array_to_json<'a, T, F>(row: &'a Row, i: usize, f: F) -> Value
+where
+    T: FromSql<'a>,
+    F: Fn(T) -> Value,
+{
+    match row.try_get::<_, Option<Vec<Option<T>>>>(i) {
+        Ok(Some(items)) => Value::Array(
+            items
+                .into_iter()
+                .map(|e| e.map(&f).unwrap_or(Value::Null))
+                .collect(),
+        ),
+        Ok(None) | Err(_) => Value::Null,
     }
 }
 

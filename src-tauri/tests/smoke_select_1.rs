@@ -374,6 +374,145 @@ async fn pg_row_to_json_maps_enum_correctly() {
 }
 
 #[tokio::test]
+async fn pg_row_to_json_maps_int_array_correctly() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    // Include a NULL element to exercise the per-element Option decoding.
+    let rows = client
+        .query("SELECT ARRAY[1, NULL, 3]::int[] AS xs", &[])
+        .await
+        .expect("SELECT int[]");
+
+    let values = quill_lib::commands::pg_row_to_json(&rows[0]);
+    assert_eq!(values.len(), 1, "should have 1 column");
+    assert_eq!(
+        values[0],
+        serde_json::json!([1, serde_json::Value::Null, 3]),
+        "got {:?}",
+        values[0]
+    );
+}
+
+#[tokio::test]
+async fn pg_row_to_json_maps_text_array_correctly() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    let rows = client
+        .query("SELECT ARRAY['a', 'b']::text[] AS xs", &[])
+        .await
+        .expect("SELECT text[]");
+
+    let values = quill_lib::commands::pg_row_to_json(&rows[0]);
+    assert_eq!(values.len(), 1, "should have 1 column");
+    assert_eq!(
+        values[0],
+        serde_json::json!(["a", "b"]),
+        "got {:?}",
+        values[0]
+    );
+}
+
+#[tokio::test]
+async fn pg_row_to_json_maps_enum_array_correctly() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    // Reuses the enum type created by `pg_row_to_json_maps_enum_correctly`;
+    // idempotent CREATE so this test passes regardless of run order.
+    client
+        .batch_execute(
+            "DO $$ BEGIN
+                CREATE TYPE quill_test_mood AS ENUM ('sad', 'ok', 'happy');
+            EXCEPTION WHEN duplicate_object THEN NULL;
+            END $$;",
+        )
+        .await
+        .expect("create enum type");
+
+    let rows = client
+        .query("SELECT ARRAY['happy', 'sad']::quill_test_mood[] AS xs", &[])
+        .await
+        .expect("SELECT enum[]");
+
+    let values = quill_lib::commands::pg_row_to_json(&rows[0]);
+    assert_eq!(values.len(), 1, "should have 1 column");
+    assert_eq!(
+        values[0],
+        serde_json::json!(["happy", "sad"]),
+        "got {:?}",
+        values[0]
+    );
+}
+
+#[tokio::test]
+async fn pg_row_to_json_marks_unsupported_type() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+
+    let url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        dsn.username, dsn.password, dsn.host, dsn.port, dsn.database
+    );
+    let (client, connection) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
+
+    // `point` has no FromSql decode here, so it must surface as the honest
+    // unsupported marker rather than a misleading NULL.
+    let rows = client
+        .query("SELECT '(1,2)'::point AS pt", &[])
+        .await
+        .expect("SELECT point");
+
+    let values = quill_lib::commands::pg_row_to_json(&rows[0]);
+    assert_eq!(values.len(), 1, "should have 1 column");
+    assert_eq!(
+        values[0],
+        serde_json::json!({ "__quill_unsupported__": "point" }),
+        "got {:?}",
+        values[0]
+    );
+}
+
+#[tokio::test]
 async fn pg_row_to_json_maps_null_correctly() {
     let Some(dsn) = dsn() else {
         skip_note();

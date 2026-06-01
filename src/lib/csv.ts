@@ -18,10 +18,14 @@ function field(value: unknown): string {
   let s: string;
   if (typeof value === "string") s = value;
   else if (typeof value === "object") {
-    try {
-      s = JSON.stringify(value);
-    } catch {
-      s = String(value);
+    if (!Array.isArray(value) && "__quill_unsupported__" in value) {
+      s = `«${String((value as Record<string, unknown>).__quill_unsupported__)}» (unsupported)`;
+    } else {
+      try {
+        s = JSON.stringify(value);
+      } catch {
+        s = String(value);
+      }
     }
   } else {
     s = String(value);

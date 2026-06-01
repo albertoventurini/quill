@@ -134,8 +134,19 @@
     previewDialog?.showModal();
   }
 
+  // Backend marker for a column type Quill can't render (see `unsupported` in
+  // src-tauri/src/commands/mod.rs). Returns the Postgres type name, or null.
+  function unsupportedType(value: unknown): string | null {
+    if (value && typeof value === "object" && !Array.isArray(value) && "__quill_unsupported__" in value) {
+      return String((value as Record<string, unknown>).__quill_unsupported__);
+    }
+    return null;
+  }
+
   function stringify(value: unknown): string {
     if (value === null) return "NULL";
+    const unsupported = unsupportedType(value);
+    if (unsupported !== null) return `«${unsupported}» (unsupported)`;
     if (typeof value === "string") return value;
     if (typeof value === "object") {
       try {
@@ -149,6 +160,7 @@
 
   function shouldPreview(value: unknown): boolean {
     if (value === null) return false;
+    if (unsupportedType(value) !== null) return false;
     if (typeof value === "object") return true;
     return stringify(value).length > 120;
   }
@@ -215,6 +227,7 @@
             {@const v = row[i]}
             <td
               class:nullable={v === null}
+              class:unsupported={unsupportedType(v) !== null}
               class:previewable={shouldPreview(v)}
               class:selected={selectedCell?.row === row && selectedCell?.colIdx === i}
               onclick={() => {
@@ -355,6 +368,11 @@
   td.nullable {
     color: var(--text-muted);
     font-style: italic;
+  }
+  td.unsupported {
+    color: var(--text-muted);
+    font-style: italic;
+    opacity: 0.85;
   }
   td.previewable {
     cursor: zoom-in;
