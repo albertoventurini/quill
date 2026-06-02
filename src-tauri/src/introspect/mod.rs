@@ -10,8 +10,8 @@
 //!
 //! The output of `introspect_database` is the canonical contents of
 //! `store::SchemaCacheRow.payload_json` and is versioned via the
-//! `PAYLOAD_VERSION` constant.  Bumping the version is M4's problem (it
-//! will add column metadata); for M2 v1 is fixed at 1.
+//! `PAYLOAD_VERSION` constant.  v2 added column metadata; v3 added
+//! primary-key flags and foreign keys for the ERD.
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -19,7 +19,11 @@ use tokio_postgres::Client;
 
 /// Canonical version of the schema-cache payload.  Bumped only when the
 /// `SchemaPayload` wire shape changes in a way old payloads cannot satisfy.
-pub const PAYLOAD_VERSION: u32 = 2;
+///
+/// v3 added per-column `is_primary_key` and per-relation `foreign_keys`
+/// (the ERD feature).  The session cache is in-memory only, so a version
+/// bump simply re-introspects on the next connect — no migration needed.
+pub const PAYLOAD_VERSION: u32 = 3;
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -85,6 +89,23 @@ pub struct ColumnInfo {
     pub not_null: bool,
     /// 1-based ordinal position within the relation, matching `pg_attribute.attnum`.
     pub position: i16,
+    /// True when this column participates in the relation's primary key.
+    /// Populated since v3; shown as a key marker in the ERD.
+    pub is_primary_key: bool,
+}
+
+/// One foreign-key constraint declared *on* a relation (the referencing side).
+///
+/// Composite keys keep their column order; `columns[i]` references
+/// `referenced_columns[i]`.  `referenced_schema` is retained so the ERD can
+/// draw cross-schema edges and pull in neighbours from other schemas.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignKeyInfo {
+    pub name: String,
+    pub columns: Vec<String>,
+    pub referenced_schema: String,
+    pub referenced_table: String,
+    pub referenced_columns: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +116,9 @@ pub struct RelationInfo {
     /// matviews this is the projected output columns; for partitioned tables
     /// it's the parent's declared columns (partitions inherit them).
     pub columns: Vec<ColumnInfo>,
+    /// Foreign keys declared on this relation.  Populated since v3; empty for
+    /// views/matviews and for tables with no outgoing FKs.
+    pub foreign_keys: Vec<ForeignKeyInfo>,
 }
 
 /// Mirrors `pg_class.relkind` for the four kinds Quill exposes in v1.
@@ -181,23 +205,34 @@ pub async fn list_databases(client: &Client) -> Result<Vec<DatabaseInfo>, Intros
 
 /// Fetch the full schema payload for the currently-connected database.
 ///
-/// Issues four independent SQL queries serially over the same connection
-/// (schemas, relations, columns, functions) and stitches them into a single
-/// `SchemaPayload`.  Schemas with no relations and no functions still
-/// appear (the user expects to see an empty schema as an empty folder).
+/// Issues independent SQL queries serially over the same connection
+/// (schemas, relations, columns, primary keys, foreign keys, functions) and
+/// stitches them into a single `SchemaPayload`.  Schemas with no relations
+/// and no functions still appear (the user expects to see an empty schema as
+/// an empty folder).
 pub async fn introspect_database(client: &Client) -> Result<SchemaPayload, IntrospectError> {
     let schemas = list_schema_names(client).await?;
     let mut relations = list_all_relations(client).await?;
     let mut columns_by_rel = list_all_columns(client).await?;
+    let pk_by_rel = list_all_primary_keys(client).await?;
+    let mut fk_by_rel = list_all_foreign_keys(client).await?;
     let functions = list_all_functions(client).await?;
     let search_path = fetch_search_path(client).await?;
 
-    // Splice columns into their owning relations.  Relations not present in
-    // the columns map (e.g. a view that returns zero columns — unusual but
-    // legal) end up with `columns: Vec::new()`.
+    // Splice columns, primary-key flags, and foreign keys into their owning
+    // relations.  Relations not present in the columns map (e.g. a view that
+    // returns zero columns — unusual but legal) end up with `columns: Vec::new()`.
     for (schema, rel) in relations.iter_mut() {
         let key = (schema.clone(), rel.name.clone());
         rel.columns = columns_by_rel.remove(&key).unwrap_or_default();
+        if let Some(pks) = pk_by_rel.get(&key) {
+            for col in rel.columns.iter_mut() {
+                if pks.contains(&col.name) {
+                    col.is_primary_key = true;
+                }
+            }
+        }
+        rel.foreign_keys = fk_by_rel.remove(&key).unwrap_or_default();
     }
 
     let mut by_schema: std::collections::BTreeMap<String, SchemaInfo> = schemas
@@ -300,6 +335,7 @@ async fn list_all_relations(
                 name,
                 kind,
                 columns: Vec::new(),
+                foreign_keys: Vec::new(),
             },
         ));
     }
@@ -345,7 +381,109 @@ async fn list_all_columns(
             type_name,
             not_null,
             position,
+            is_primary_key: false,
         });
+    }
+    Ok(out)
+}
+
+/// Map each `(schema, table)` to the set of column names in its primary key.
+/// Tables with no primary key simply don't appear in the map.
+async fn list_all_primary_keys(
+    client: &Client,
+) -> Result<
+    std::collections::HashMap<(String, String), std::collections::HashSet<String>>,
+    IntrospectError,
+> {
+    let rows = client
+        .query(
+            r"SELECT n.nspname AS schema,
+                     c.relname AS table_name,
+                     a.attname AS column_name
+              FROM pg_constraint con
+              JOIN pg_class      c ON con.conrelid = c.oid
+              JOIN pg_namespace  n ON c.relnamespace = n.oid
+              JOIN pg_attribute  a ON a.attrelid = con.conrelid
+                                  AND a.attnum = ANY(con.conkey)
+              WHERE con.contype = 'p'
+                AND n.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+                AND n.nspname <> 'information_schema'",
+            &[],
+        )
+        .await?;
+
+    let mut out: std::collections::HashMap<(String, String), std::collections::HashSet<String>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let schema: String = row.try_get::<_, &str>("schema")?.to_string();
+        let table: String = row.try_get::<_, &str>("table_name")?.to_string();
+        let column: String = row.try_get::<_, &str>("column_name")?.to_string();
+        out.entry((schema, table)).or_default().insert(column);
+    }
+    Ok(out)
+}
+
+/// Map each `(schema, table)` to the foreign keys declared on it (the
+/// referencing side).  Composite keys keep their column order via the
+/// `unnest(... WITH ORDINALITY)` join; rows for one constraint arrive
+/// consecutively (ordered by name then ordinal) so they group by appending
+/// to the last `ForeignKeyInfo` of the same name.
+async fn list_all_foreign_keys(
+    client: &Client,
+) -> Result<std::collections::HashMap<(String, String), Vec<ForeignKeyInfo>>, IntrospectError> {
+    let rows = client
+        .query(
+            r"SELECT con.conname AS name,
+                     n.nspname   AS schema,
+                     c.relname   AS table_name,
+                     att.attname AS column_name,
+                     fn.nspname  AS ref_schema,
+                     fc.relname  AS ref_table,
+                     fatt.attname AS ref_column
+              FROM pg_constraint con
+              JOIN pg_class     c  ON con.conrelid = c.oid
+              JOIN pg_namespace n  ON c.relnamespace = n.oid
+              JOIN pg_class     fc ON con.confrelid = fc.oid
+              JOIN pg_namespace fn ON fc.relnamespace = fn.oid
+              JOIN LATERAL unnest(con.conkey, con.confkey)
+                       WITH ORDINALITY AS k(conkey, confkey, ord) ON true
+              JOIN pg_attribute att  ON att.attrelid = con.conrelid
+                                    AND att.attnum = k.conkey
+              JOIN pg_attribute fatt ON fatt.attrelid = con.confrelid
+                                    AND fatt.attnum = k.confkey
+              WHERE con.contype = 'f'
+                AND n.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+                AND n.nspname <> 'information_schema'
+              ORDER BY n.nspname, c.relname, con.conname, k.ord",
+            &[],
+        )
+        .await?;
+
+    let mut out: std::collections::HashMap<(String, String), Vec<ForeignKeyInfo>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let name: String = row.try_get::<_, &str>("name")?.to_string();
+        let schema: String = row.try_get::<_, &str>("schema")?.to_string();
+        let table: String = row.try_get::<_, &str>("table_name")?.to_string();
+        let column: String = row.try_get::<_, &str>("column_name")?.to_string();
+        let ref_schema: String = row.try_get::<_, &str>("ref_schema")?.to_string();
+        let ref_table: String = row.try_get::<_, &str>("ref_table")?.to_string();
+        let ref_column: String = row.try_get::<_, &str>("ref_column")?.to_string();
+
+        let fks = out.entry((schema, table)).or_default();
+        match fks.last_mut() {
+            Some(fk) if fk.name == name => {
+                fk.columns.push(column);
+                fk.referenced_columns.push(ref_column);
+            }
+            _ => fks.push(ForeignKeyInfo {
+                name,
+                columns: vec![column],
+                referenced_schema: ref_schema,
+                referenced_table: ref_table,
+                referenced_columns: vec![ref_column],
+            }),
+        }
     }
     Ok(out)
 }
@@ -417,19 +555,35 @@ mod tests {
                                 type_name: "integer".into(),
                                 not_null: true,
                                 position: 1,
+                                is_primary_key: true,
                             },
                             ColumnInfo {
                                 name: "email".into(),
                                 type_name: "text".into(),
                                 not_null: false,
                                 position: 2,
+                                is_primary_key: false,
                             },
                         ],
+                        foreign_keys: Vec::new(),
+                    },
+                    RelationInfo {
+                        name: "orders".into(),
+                        kind: RelationKind::Table,
+                        columns: Vec::new(),
+                        foreign_keys: vec![ForeignKeyInfo {
+                            name: "orders_user_id_fkey".into(),
+                            columns: vec!["user_id".into()],
+                            referenced_schema: "public".into(),
+                            referenced_table: "users".into(),
+                            referenced_columns: vec!["id".into()],
+                        }],
                     },
                     RelationInfo {
                         name: "user_emails".into(),
                         kind: RelationKind::View,
                         columns: Vec::new(),
+                        foreign_keys: Vec::new(),
                     },
                 ],
                 functions: vec![FunctionInfo {
@@ -485,7 +639,10 @@ mod tests {
     }
 
     #[test]
-    fn payload_version_is_two_in_m4() {
-        assert_eq!(PAYLOAD_VERSION, 2, "M4.1 bumps the payload version");
+    fn payload_version_is_three_with_erd_metadata() {
+        assert_eq!(
+            PAYLOAD_VERSION, 3,
+            "ERD feature adds PK/FK metadata and bumps the payload version"
+        );
     }
 }

@@ -9,6 +9,7 @@
     type CommandError,
   } from "$lib/tauri";
   import ResultGrid from "$lib/ResultGrid.svelte";
+  import Erd from "$lib/Erd.svelte";
   import Editor from "$lib/Editor.svelte";
   import { statementAtCursor } from "$lib/statement";
   import Tree from "$lib/Tree.svelte";
@@ -16,7 +17,7 @@
   import { clearDatabaseSubtree, errorMessage, loadDatabases } from "$lib/tree";
   import { clearServerSchemaPayloads } from "$lib/schemaStore";
 import Tabs from "$lib/Tabs.svelte";
-import { makeTab, type Tab } from "$lib/tabs";
+import { makeTab, makeErdTab, type Tab } from "$lib/tabs";
 import SidePanel from "$lib/SidePanel.svelte";
 import SaveDialog from "$lib/SaveDialog.svelte";
 import Resizer from "$lib/Resizer.svelte";
@@ -534,6 +535,25 @@ import { save } from "@tauri-apps/plugin-dialog";
     void runFromEditor(statementAtCursor(sql, sql.length, { from: sql.length, to: sql.length }));
   }
 
+  /** Open an ERD tab for `schema`, seeded with `seed` tables (or "all").
+   *  Invoked by the tree context menu. */
+  function openErd(
+    serverId: number,
+    database: string,
+    schema: string,
+    seed: string[] | "all",
+    includeNeighbors: boolean,
+  ) {
+    if (!connections.some((c) => c.id === serverId)) {
+      sidePanelError = "This connection has been deleted.";
+      return;
+    }
+    selectedDb = { serverId, database };
+    const tab = makeErdTab(serverId, database, schema, seed, includeNeighbors);
+    tabs.push(tab);
+    activeTabId = tab.id;
+  }
+
   let selectedConn = $derived(
     selectedDb ? connections.find((c) => c.id === selectedDb!.serverId) ?? null : null,
   );
@@ -571,6 +591,16 @@ import { save } from "@tauri-apps/plugin-dialog";
             ? `SELECT * FROM ${rel} LIMIT 100`
             : `SELECT * FROM ${rel}`;
           openQueryAndRun(target.serverId, target.database, sql, target.schema);
+        }
+        break;
+      case "erd-schema":
+        if (target.kind === "schema") {
+          openErd(target.serverId, target.database, target.name, "all", false);
+        }
+        break;
+      case "erd-table":
+        if (target.kind === "leaf") {
+          openErd(target.serverId, target.database, target.schema, [target.name], true);
         }
         break;
       case "connect":
@@ -649,6 +679,7 @@ import { save } from "@tauri-apps/plugin-dialog";
     } else if (t.kind === "schema") {
       if (isConnected(t.serverId)) {
         items.push({ action: "open-query", label: "New query scoped to this schema" });
+        items.push({ action: "erd-schema", label: "View as ERD" });
       }
       items.push({ action: "refresh", label: "Refresh schema" });
       items.push({ action: "copy-name", label: "Copy qualified name" });
@@ -656,6 +687,7 @@ import { save } from "@tauri-apps/plugin-dialog";
       if (isRelationLeaf(t.leafKind) && isConnected(t.serverId)) {
         items.push({ action: "select-preview", label: "SELECT * (first 100 rows)" });
         items.push({ action: "select-all", label: "SELECT * (no limit)" });
+        items.push({ action: "erd-table", label: "Show in ERD" });
       }
       items.push({ action: "refresh", label: "Refresh schema" });
       items.push({ action: "copy-name", label: "Copy qualified name" });
@@ -1050,6 +1082,17 @@ import { save } from "@tauri-apps/plugin-dialog";
 
     {#if activeTab}
       {@const tab = activeTab}
+      {#if tab.kind === "erd" && tab.erd}
+      {#key tab.id}
+        <Erd
+          serverId={tab.serverId}
+          database={tab.database}
+          schema={tab.erd.schema}
+          seed={tab.erd.seed}
+          includeNeighbors={tab.erd.includeNeighbors}
+        />
+      {/key}
+      {:else}
       {#key tab.id}
         <Editor
           bind:this={editor}
@@ -1136,6 +1179,7 @@ import { save } from "@tauri-apps/plugin-dialog";
         onSaved={() => { savedListRefreshKey += 1; }}
         onError={(msg) => (sidePanelError = msg)}
       />
+      {/if}
     {:else}
       <p class="muted">Right-click a database (or a schema, to scope it) in the tree → “New query” to open an editor.</p>
     {/if}

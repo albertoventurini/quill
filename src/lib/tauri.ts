@@ -84,12 +84,22 @@ export type ColumnInfo = {
   type_name: string;
   not_null: boolean;
   position: number;
+  is_primary_key: boolean;
+};
+
+export type ForeignKeyInfo = {
+  name: string;
+  columns: string[];
+  referenced_schema: string;
+  referenced_table: string;
+  referenced_columns: string[];
 };
 
 export type RelationInfo = {
   name: string;
   kind: RelationKind;
   columns: ColumnInfo[];
+  foreign_keys: ForeignKeyInfo[];
 };
 
 export type FunctionKind =

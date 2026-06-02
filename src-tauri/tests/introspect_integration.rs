@@ -247,7 +247,7 @@ async fn introspect_database_returns_columns_for_relations() {
         .await
         .expect("introspect_database");
 
-    assert_eq!(payload.v, 2, "post-M4.1 payload version must be 2");
+    assert_eq!(payload.v, 3, "ERD-era payload version must be 3");
 
     let schema = payload
         .schemas
@@ -299,6 +299,100 @@ async fn introspect_database_returns_columns_for_relations() {
     assert_eq!(view.columns[1].name, "email");
 
     client.batch_execute("ROLLBACK").await.expect("rollback");
+}
+
+#[tokio::test]
+async fn introspect_database_captures_primary_and_foreign_keys() {
+    let Some(dsn) = dsn() else {
+        skip_note();
+        return;
+    };
+    let connector = connector_from(&dsn);
+    let (client, _cancel) = connector.connect(&dsn.database).await.expect("connect");
+
+    client.batch_execute("BEGIN").await.expect("begin");
+    client
+        .batch_execute("CREATE SCHEMA quill_erd_fixture")
+        .await
+        .expect("create schema");
+    // Composite primary key on the parent.
+    client
+        .batch_execute(
+            "CREATE TABLE quill_erd_fixture.customers (
+                 tenant_id integer NOT NULL,
+                 id        integer NOT NULL,
+                 name      text,
+                 PRIMARY KEY (tenant_id, id)
+             )",
+        )
+        .await
+        .expect("create customers");
+    // Composite foreign key referencing the parent's composite PK.
+    client
+        .batch_execute(
+            "CREATE TABLE quill_erd_fixture.orders (
+                 id          integer PRIMARY KEY,
+                 tenant_id   integer NOT NULL,
+                 customer_id integer NOT NULL,
+                 CONSTRAINT orders_customer_fkey
+                   FOREIGN KEY (tenant_id, customer_id)
+                   REFERENCES quill_erd_fixture.customers (tenant_id, id)
+             )",
+        )
+        .await
+        .expect("create orders");
+
+    let payload = introspect::introspect_database(&client)
+        .await
+        .expect("introspect_database");
+
+    let schema = payload
+        .schemas
+        .iter()
+        .find(|s| s.name == "quill_erd_fixture")
+        .expect("fixture schema must appear");
+
+    // Composite PK flags both key columns and nothing else.
+    let customers = schema
+        .relations
+        .iter()
+        .find(|r| r.name == "customers")
+        .expect("customers table must appear");
+    let pk_cols: Vec<&str> = customers
+        .columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(pk_cols, vec!["tenant_id", "id"], "composite PK columns");
+    assert!(
+        customers.foreign_keys.is_empty(),
+        "customers has no outgoing FKs"
+    );
+
+    // Composite FK keeps column order and points at the parent's PK columns.
+    let orders = schema
+        .relations
+        .iter()
+        .find(|r| r.name == "orders")
+        .expect("orders table must appear");
+    assert_eq!(orders.foreign_keys.len(), 1, "one FK on orders");
+    let fk = &orders.foreign_keys[0];
+    assert_eq!(fk.columns, vec!["tenant_id", "customer_id"]);
+    assert_eq!(fk.referenced_schema, "quill_erd_fixture");
+    assert_eq!(fk.referenced_table, "customers");
+    assert_eq!(fk.referenced_columns, vec!["tenant_id", "id"]);
+    // `orders.id` is the singleton PK here.
+    let orders_pk: Vec<&str> = orders
+        .columns
+        .iter()
+        .filter(|c| c.is_primary_key)
+        .map(|c| c.name.as_str())
+        .collect();
+    assert_eq!(orders_pk, vec!["id"]);
+
+    client.batch_execute("ROLLBACK").await.expect("rollback");
+    PgConnector::close(client).await;
 }
 
 #[tokio::test]

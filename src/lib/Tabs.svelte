@@ -40,6 +40,12 @@
   /** Full path for the hover tooltip — the label itself only shows the
    *  capped `db.schema`, so the tooltip carries the complete context. */
   function tabTitle(t: Tab): string {
+    if (t.kind === "erd") {
+      return [
+        `${serverNameLookup(t.serverId)} / ${t.database} . ${t.erd?.schema ?? ""}`,
+        "Entity-relationship diagram",
+      ].join("\n");
+    }
     const path = t.schema
       ? `${serverNameLookup(t.serverId)} / ${t.database} . ${t.schema}`
       : `${serverNameLookup(t.serverId)} / ${t.database}`;
@@ -87,8 +93,12 @@
       <span class="labels">
         <span class="server">{serverNameLookup(t.serverId)}</span>
         <span class="path">
-          <span class="path-text"><span class="db">{t.database}</span>{#if t.schema}<span class="sep">.</span><span class="schema">{t.schema}</span>{/if}</span>
-          {#if dirty(t)}<span class="dirty" aria-label="unsaved">•</span>{/if}
+          {#if t.kind === "erd"}
+            <span class="path-text"><span class="erd-badge">ERD</span><span class="schema">{t.erd?.schema}</span></span>
+          {:else}
+            <span class="path-text"><span class="db">{t.database}</span>{#if t.schema}<span class="sep">.</span><span class="schema">{t.schema}</span>{/if}</span>
+            {#if dirty(t)}<span class="dirty" aria-label="unsaved">•</span>{/if}
+          {/if}
         </span>
       </span>
       <button
@@ -161,6 +171,16 @@
   }
   .sep { color: var(--text-faint); }
   .schema { color: var(--text-accent); font-weight: 500; }
+  .erd-badge {
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    color: var(--text-accent);
+    border: 1px solid var(--border-secondary);
+    border-radius: 2px;
+    padding: 0 0.2rem;
+    margin-right: 0.3rem;
+  }
   .db { color: var(--text-primary); font-weight: 500; }
   /* Muted = the tab matches the tree's current selection. */
   .tab.muted .server { color: var(--text-faint); }
