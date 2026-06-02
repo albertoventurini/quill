@@ -82,3 +82,18 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
+
+      # Cross-ecosystem: OSV DB merges RustSec + GHSA + others, so it catches
+      # advisories that per-ecosystem tools haven't picked up yet. Reads both
+      # Cargo.lock and pnpm-lock.yaml in one pass.
+      - name: Install osv-scanner
+        # Pinned: Dependabot doesn't manage raw binary URLs, so bump this
+        # manually after reviewing the release notes.
+        env:
+          OSV_VERSION: "2.3.8"
+        run: |
+          curl -sSL -o /tmp/osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
+          install -m 0755 /tmp/osv-scanner /usr/local/bin/osv-scanner
+      - name: osv-scanner
+        run: osv-scanner --recursive --skip-git .
