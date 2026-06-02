@@ -20,6 +20,7 @@
     onSelectDb,
     onContextMenu,
     onConnectServer,
+    onShowError,
     slotLabel,
     expiryRemainingMs,
   }: {
@@ -29,6 +30,7 @@
     onSelectDb: (serverId: number, database: string) => void;
     onContextMenu: (e: MouseEvent, target: ContextMenuTarget) => void;
     onConnectServer?: (id: number) => void;
+    onShowError?: (node: TreeNode) => void;
     slotLabel?: string;
     expiryRemainingMs?: number;
   } = $props();
@@ -161,7 +163,14 @@
         <span class="loading">…</span>
       {/if}
       {#if "error" in node && node.error}
-        <span class="error" title={node.error}>!</span>
+        <span
+          class="error error-flag"
+          role="button"
+          tabindex="0"
+          title={node.error}
+          onclick={(e) => { e.stopPropagation(); onShowError?.(node); }}
+          onkeydown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); e.stopPropagation(); onShowError?.(node); } }}
+        >!</span>
       {/if}
     </button>
   </div>
@@ -184,6 +193,7 @@
             {onSelectDb}
             {onContextMenu}
             {onConnectServer}
+            {onShowError}
           />
         {/each}
       {/if}
@@ -287,6 +297,13 @@
   .expiry-warn { color: var(--text-warn, #e6a817); }
   .loading { color: var(--text-muted); font-style: italic; }
   .error { color: var(--text-error); font-weight: bold; cursor: help; }
+  .error-flag {
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    cursor: pointer;
+  }
   .status-hint {
     display: block;
     font-size: 0.8rem;

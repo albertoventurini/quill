@@ -89,7 +89,7 @@ pub enum QueryError {
 
 impl From<tokio_postgres::Error> for QueryError {
     fn from(e: tokio_postgres::Error) -> Self {
-        QueryError::Pg(e.to_string())
+        QueryError::Pg(crate::pg::format_pg_error(&e))
     }
 }
 impl From<SlotError> for QueryError {
@@ -148,7 +148,7 @@ pub async fn run_query(
         let set_sql = format!(r#"SET LOCAL search_path TO {}"#, quote_ident(schema));
         if let Err(e) = guard.batch_execute(&set_sql).await {
             let _ = guard.batch_execute("ROLLBACK").await;
-            return Err(QueryError::Pg(e.to_string()));
+            return Err(QueryError::Pg(crate::pg::format_pg_error(&e)));
         }
     }
 
@@ -166,7 +166,7 @@ pub async fn run_query(
         Ok(rs) => rs,
         Err(e) => {
             let _ = guard.batch_execute("ROLLBACK").await;
-            return Err(QueryError::Pg(e.to_string()));
+            return Err(QueryError::Pg(crate::pg::format_pg_error(&e)));
         }
     };
     let duration_ms_so_far = start.elapsed().as_millis() as u64;
@@ -248,7 +248,7 @@ pub async fn fetch_more(
             // can't remove from inside, so collect the id and drop after.
             drop(entry);
             results.by_id.remove(&result_id);
-            return Err(QueryError::Pg(e.to_string()));
+            return Err(QueryError::Pg(crate::pg::format_pg_error(&e)));
         }
     };
     entry.duration_ms_so_far += start.elapsed().as_millis() as u64;

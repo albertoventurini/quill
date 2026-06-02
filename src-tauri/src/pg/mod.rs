@@ -102,7 +102,7 @@ impl Connector for PgConnector {
             let (client, connection) = config
                 .connect(tls)
                 .await
-                .map_err(|e| ConnectorError(e.to_string()))?;
+                .map_err(|e| connect_failed(database, &e))?;
             let cancel_token = client.cancel_token();
             spawn_connection_driver(connection);
             (client, cancel_token)
@@ -110,7 +110,7 @@ impl Connector for PgConnector {
             let (client, connection) = config
                 .connect(NoTls)
                 .await
-                .map_err(|e| ConnectorError(e.to_string()))?;
+                .map_err(|e| connect_failed(database, &e))?;
             let cancel_token = client.cancel_token();
             spawn_connection_driver(connection);
             (client, cancel_token)
@@ -125,6 +125,37 @@ impl Connector for PgConnector {
     async fn close(_conn: Self::Conn) {
         // intentionally empty
     }
+}
+
+/// Log a failed connection attempt and wrap its message in a `ConnectorError`.
+/// Connection failures previously vanished — `quill.log` only recorded
+/// background-driver drops, never the initial handshake/auth error.
+fn connect_failed(database: &str, e: &tokio_postgres::Error) -> ConnectorError {
+    let msg = format_pg_error(e);
+    tracing::warn!(database, error = %msg, "postgres connect failed");
+    ConnectorError(msg)
+}
+
+/// Build a human-useful message from a tokio-postgres error.
+///
+/// `tokio_postgres::Error`'s own `Display` prints only the terse *kind* label
+/// (e.g. the infamous `"db error"`); the actionable detail lives in the
+/// `DbError` cause.  When present, unpack it into the SQLSTATE message plus
+/// DETAIL/HINT and the error code.  Otherwise fall back to `Display`, which
+/// covers IO/TLS/auth-handshake failures that carry no `DbError`.
+pub fn format_pg_error(e: &tokio_postgres::Error) -> String {
+    let Some(db) = e.as_db_error() else {
+        return e.to_string();
+    };
+    let mut msg = db.message().to_string();
+    if let Some(detail) = db.detail() {
+        msg.push_str(&format!("\nDETAIL: {detail}"));
+    }
+    if let Some(hint) = db.hint() {
+        msg.push_str(&format!("\nHINT: {hint}"));
+    }
+    msg.push_str(&format!("\n(SQLSTATE {})", db.code().code()));
+    msg
 }
 
 /// Spawn the driver future returned alongside the `Client`.  The driver is

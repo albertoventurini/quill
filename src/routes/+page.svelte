@@ -47,6 +47,31 @@ import { save } from "@tauri-apps/plugin-dialog";
   let pwPassword = $state("");
   let pwError = $state("");
 
+  // Generic error modal: surfaces the full underlying error for any failure
+  // (connection or query) that would otherwise hide behind a red "!" or a
+  // terse inline label.
+  let errorDialog = $state<HTMLDialogElement | null>(null);
+  let errorInfo = $state<{ title: string; kind?: string; message: string } | null>(null);
+
+  function showErrorModal(title: string, err: unknown) {
+    const ce = err as Partial<CommandError> | null;
+    errorInfo = {
+      title,
+      kind: typeof ce?.kind === "string" ? ce.kind : undefined,
+      message: errorMessage(err),
+    };
+    errorDialog?.showModal();
+  }
+
+  // Record a query failure inline (persists after the modal closes) and pop the
+  // modal — except BudgetFull, which has its own dedicated notice.
+  function reportQueryError(tab: Tab, err: unknown) {
+    tab.lastError = err as CommandError;
+    if ((err as CommandError)?.kind !== "BudgetFull") {
+      showErrorModal("Query failed", err);
+    }
+  }
+
   let editingId = $state<number | null>(null);
 
   // Settings dialog
@@ -422,6 +447,7 @@ import { save } from "@tauri-apps/plugin-dialog";
       loadDatabases(serverNode);
     } catch (err) {
       serverNode.error = errorMessage(err);
+      showErrorModal("Connection failed", err);
     } finally {
       serverNode.loading = false;
     }
@@ -809,7 +835,7 @@ import { save } from "@tauri-apps/plugin-dialog";
       };
       if (!r.has_more) tab.active.resultId = "";
     } catch (err) {
-      tab.lastError = err as CommandError;
+      reportQueryError(tab, err);
     } finally {
       tab.runningQuery = false;
     }
@@ -828,7 +854,7 @@ import { save } from "@tauri-apps/plugin-dialog";
       tab.active.durationMs = chunk.duration_ms_so_far;
       if (!chunk.has_more) tab.active.resultId = "";
     } catch (err) {
-      tab.lastError = err as CommandError;
+      reportQueryError(tab, err);
       tab.active = null;
     } finally {
       tab.loadingMore = false;
@@ -978,6 +1004,7 @@ import { save } from "@tauri-apps/plugin-dialog";
                 onSelectDb={selectDb}
                 onContextMenu={openMenu}
                 onConnectServer={connectServer}
+                onShowError={(n) => { if ("error" in n && n.error) showErrorModal("Connection error", { kind: "Slot", message: n.error }); }}
                 slotLabel={slotLabel(connectedState[serverNode.conn.id])}
                 expiryRemainingMs={expiryRemainingMs(connectedState[serverNode.conn.id])}
               />
@@ -1205,6 +1232,21 @@ import { save } from "@tauri-apps/plugin-dialog";
   </form>
 </dialog>
 
+<!-- ═══════ ERROR DIALOG ═══════ -->
+<dialog bind:this={errorDialog} class="modal error-modal">
+  {#if errorInfo}
+    <h2>
+      {errorInfo.title}
+      {#if errorInfo.kind}<span class="err-badge">{errorInfo.kind}</span>{/if}
+    </h2>
+    <pre class="error-detail">{errorInfo.message}</pre>
+    <div class="modal-actions">
+      <button type="button" class="btn" onclick={() => navigator.clipboard.writeText(errorInfo!.message).catch(() => {})}>Copy</button>
+      <button type="button" class="btn btn-primary" onclick={() => errorDialog?.close()}>Close</button>
+    </div>
+  {/if}
+</dialog>
+
 <!-- ═══════ SETTINGS DIALOG ═══════ -->
 <dialog bind:this={settingsDialog} class="modal">
   <h2>Settings</h2>
@@ -1346,6 +1388,22 @@ import { save } from "@tauri-apps/plugin-dialog";
 
   .modal { border: 1px solid var(--border-secondary); border-radius: 8px; padding: 1.25rem; max-width: 400px; width: 90%; background: var(--bg-surface); color: var(--text-primary); }
   .modal::backdrop { background: var(--modal-backdrop); }
+  .error-modal { max-width: 600px; }
+  .error-detail {
+    margin: 0.5rem 0 0;
+    padding: 0.6rem 0.7rem;
+    max-height: 50vh;
+    overflow: auto;
+    background: var(--bg-base, var(--bg-surface));
+    border: 1px solid var(--border-secondary);
+    border-radius: 4px;
+    color: var(--text-error);
+    font-family: var(--font-mono, monospace);
+    font-size: 0.85rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    user-select: text;
+  }
   .add-form { display: flex; flex-direction: column; gap: 0.5rem; }
   .field { display: flex; flex-direction: column; gap: 0.15rem; font-size: 0.9rem; }
   .radio { display: inline-flex; align-items: center; gap: 0.3rem; font-weight: normal; }
