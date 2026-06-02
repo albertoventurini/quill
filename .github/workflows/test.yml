@@ -96,4 +96,4 @@ jobs:
             "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
           install -m 0755 /tmp/osv-scanner /usr/local/bin/osv-scanner
       - name: osv-scanner
-        run: osv-scanner --recursive --skip-git .
+        run: osv-scanner scan source --recursive .
