@@ -16,6 +16,24 @@ export type ActiveResult = {
   durationMs: number;
 };
 
+/** One result kept in a query tab's result strip.  A tab holds at most one
+ *  *unpinned* pane (the "scratch" result, replaced in place on each run); the
+ *  scratch pane is also the only one that may hold a live cursor/slot.  Pinning
+ *  snapshots the pane — its cursor is closed (slot freed) and `resultId` cleared
+ *  — so pinned panes survive re-runs without consuming the connection budget. */
+export type ResultPane = ActiveResult & {
+  /** Monotonic; assigned at creation.  Identifies the pane within its tab. */
+  paneId: number;
+
+  /** Pinned panes are kept across re-runs; the unpinned scratch pane is
+   *  replaced.  Pinning a pane snapshots it (closes its cursor). */
+  pinned: boolean;
+
+  /** The statement that produced this result — shown as the pane's tooltip so
+   *  same-sized results stay distinguishable. */
+  sql: string;
+};
+
 /** What a tab displays. "query" is the editor + result grid; "erd" is an
  *  entity-relationship diagram of a schema (or a subset of its tables). */
 export type TabKind = "query" | "erd";
@@ -53,9 +71,14 @@ export type Tab = {
    *  computed as `sql !== initialSql`. */
   initialSql: string;
 
-  /** Set after a successful `run_query`; cleared by Close-result, Cancel,
-   *  or DB change. */
-  active: ActiveResult | null;
+  /** Result panes shown in this tab's result strip, oldest first.  Empty until
+   *  the first successful `run_query`.  At most one pane is unpinned (scratch);
+   *  see {@link ResultPane}. */
+  results: ResultPane[];
+
+  /** `paneId` of the currently-displayed pane, or `null` when `results` is
+   *  empty.  Resolve via {@link activeResult}. */
+  activeResultId: number | null;
 
   /** Inline error from the last Run / Load more / Cancel. */
   lastError: CommandError | null;
@@ -74,6 +97,22 @@ export type Tab = {
 };
 
 let nextId = 1;
+let nextPaneId = 1;
+
+/** Build a fresh result pane from a `run_query` response.  `pinned` starts
+ *  false (it's the scratch pane until the user pins it). */
+export function makeResultPane(
+  sql: string,
+  result: ActiveResult,
+): ResultPane {
+  return { ...result, paneId: nextPaneId++, pinned: false, sql };
+}
+
+/** The pane currently displayed in `tab`, or `null` when the tab has no
+ *  results. */
+export function activeResult(tab: Tab): ResultPane | null {
+  return tab.results.find((r) => r.paneId === tab.activeResultId) ?? null;
+}
 
 /** Create a new query tab pinned to `(serverId, database)` with an empty
  *  buffer (or the supplied `sql`).  `initialSql` is set to the same value so
@@ -93,7 +132,8 @@ export function makeTab(
     schema,
     sql,
     initialSql: sql,
-    active: null,
+    results: [],
+    activeResultId: null,
     lastError: null,
     editorWarning: null,
     runningQuery: false,
@@ -120,7 +160,8 @@ export function makeErdTab(
     schema,
     sql: "",
     initialSql: "",
-    active: null,
+    results: [],
+    activeResultId: null,
     lastError: null,
     editorWarning: null,
     runningQuery: false,
@@ -132,4 +173,5 @@ export function makeErdTab(
 /** Test-only: reset the id counter so test ids start at 1.  Not used by app code. */
 export function __resetTabIds(): void {
   nextId = 1;
+  nextPaneId = 1;
 }

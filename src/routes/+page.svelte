@@ -9,6 +9,7 @@
     type CommandError,
   } from "$lib/tauri";
   import ResultGrid from "$lib/ResultGrid.svelte";
+  import ResultTabs from "$lib/ResultTabs.svelte";
   import Erd from "$lib/Erd.svelte";
   import Editor from "$lib/Editor.svelte";
   import { statementAtCursor } from "$lib/statement";
@@ -17,7 +18,7 @@
   import { clearDatabaseSubtree, errorMessage, loadDatabases } from "$lib/tree";
   import { clearServerSchemaPayloads } from "$lib/schemaStore";
 import Tabs from "$lib/Tabs.svelte";
-import { makeTab, makeErdTab, type Tab } from "$lib/tabs";
+import { makeTab, makeErdTab, makeResultPane, activeResult, type Tab } from "$lib/tabs";
 import SidePanel from "$lib/SidePanel.svelte";
 import SaveDialog from "$lib/SaveDialog.svelte";
 import Resizer from "$lib/Resizer.svelte";
@@ -194,13 +195,13 @@ import { save } from "@tauri-apps/plugin-dialog";
 
   // Which other tabs hold a slot on this server, and why.  Every busy slot is
   // held either by an in-flight query (`runningQuery`) or by an open result
-  // cursor (`active.resultId`) — a `CancelRequest` only frees the former, so
-  // the notice must offer the matching remedy for each.
+  // cursor (a pane with a live `resultId`) — a `CancelRequest` only frees the
+  // former, so the notice must offer the matching remedy for each.
   function slotHolders(tab: Tab): { running: Tab[]; results: Tab[] } {
     const others = tabs.filter((t) => t.serverId === tab.serverId && t.id !== tab.id);
     return {
       running: others.filter((t) => t.runningQuery),
-      results: others.filter((t) => !!t.active?.resultId),
+      results: others.filter((t) => t.results.some((r) => r.resultId)),
     };
   }
 
@@ -316,8 +317,10 @@ import { save } from "@tauri-apps/plugin-dialog";
     // Close any tabs targeting this server, freeing their results first.
     const targets = tabs.filter((t) => t.serverId === id);
     for (const t of targets) {
-      if (t.active?.resultId) {
-        try { await api.closeResult(t.active.resultId); } catch {}
+      for (const r of t.results) {
+        if (r.resultId) {
+          try { await api.closeResult(r.resultId); } catch {}
+        }
       }
     }
     tabs = tabs.filter((t) => t.serverId !== id);
@@ -750,10 +753,12 @@ import { save } from "@tauri-apps/plugin-dialog";
         await api.cancelQuery(tab.serverId, tab.database);
       } catch { /* best-effort */ }
     }
-    if (tab.active?.resultId) {
-      try {
-        await api.closeResult(tab.active.resultId);
-      } catch { /* best-effort */ }
+    for (const r of tab.results) {
+      if (r.resultId) {
+        try {
+          await api.closeResult(r.resultId);
+        } catch { /* best-effort */ }
+      }
     }
 
     tabs = tabs.filter((t) => t.id !== id);
@@ -802,13 +807,16 @@ import { save } from "@tauri-apps/plugin-dialog";
     const tab = tabs.find((t) => t.id === dbDialogTabId);
     if (!tab) return;
 
-    // Close any active result on the old DB first — same hygiene rule as
-    // M3.6's "switching DBs closes the prior result," but applied at the
-    // tab level.
-    if (tab.active?.resultId) {
-      try { await api.closeResult(tab.active.resultId); } catch {}
-      tab.active = null;
+    // Close every result on the old DB first — same hygiene rule as M3.6's
+    // "switching DBs closes the prior result," but applied to all panes since
+    // they were all run against the database we're leaving.
+    for (const r of tab.results) {
+      if (r.resultId) {
+        try { await api.closeResult(r.resultId); } catch {}
+      }
     }
+    tab.results = [];
+    tab.activeResultId = null;
 
     tab.database = dbDialogPick;
     // Database changed → previous SQL may not parse against the new schema,
@@ -850,23 +858,47 @@ import { save } from "@tauri-apps/plugin-dialog";
       return;
     }
 
-    // Close any prior result on this tab.
-    await closeActive(tab);
+    // Replace-unless-pinned + slot safety.  Snapshot every unpinned pane that
+    // still holds a live cursor: close it (freeing the slot so this run has
+    // budget) but keep its rows.  This also guarantees at most one cursor stays
+    // open per editor.  The active unpinned pane is then overwritten in place by
+    // the new result; with no unpinned active pane the result appends a fresh
+    // one (pinned panes are never replaced).
+    const replaceTarget = (() => {
+      const a = activeResult(tab);
+      return a && !a.pinned ? a.paneId : null;
+    })();
+    for (const p of tab.results) {
+      if (!p.pinned && p.resultId) {
+        const rid = p.resultId;
+        p.resultId = "";
+        p.hasMore = false;
+        try { await api.closeResult(rid); } catch {}
+      }
+    }
 
     tab.runningQuery = true;
     tab.lastError = null;
     try {
       const r: RunResult = await api.runQuery(tab.serverId, tab.database, payload.text, tab.schema);
-      tab.active = {
-        resultId: r.result_id,
+      const pane = makeResultPane(payload.text, {
+        resultId: r.has_more ? r.result_id : "",
         columns: r.columns,
         rows: r.first_chunk,
         hasMore: r.has_more,
         rowCount: r.row_count_so_far,
         durationMs: r.duration_ms_so_far,
-      };
-      if (!r.has_more) tab.active.resultId = "";
+      });
+      const idx = replaceTarget === null ? -1 : tab.results.findIndex((p) => p.paneId === replaceTarget);
+      if (idx >= 0) {
+        tab.results[idx] = pane;
+      } else {
+        tab.results.push(pane);
+      }
+      tab.activeResultId = pane.paneId;
     } catch (err) {
+      // Leave the prior pane in place as a static snapshot (its cursor is
+      // already closed above) and surface the error alongside it.
       reportQueryError(tab, err);
     } finally {
       tab.runningQuery = false;
@@ -876,46 +908,80 @@ import { save } from "@tauri-apps/plugin-dialog";
 
   async function loadMore() {
     const tab = activeTab;
-    if (!tab || !tab.active || tab.loadingMore) return;
+    const a = tab ? activeResult(tab) : null;
+    if (!tab || !a || tab.loadingMore) return;
     tab.loadingMore = true;
     try {
-      const chunk: ChunkResult = await api.fetchMore(tab.active.resultId);
-      tab.active.rows = [...tab.active.rows, ...chunk.rows];
-      tab.active.hasMore = chunk.has_more;
-      tab.active.rowCount = chunk.row_count_so_far;
-      tab.active.durationMs = chunk.duration_ms_so_far;
-      if (!chunk.has_more) tab.active.resultId = "";
+      const chunk: ChunkResult = await api.fetchMore(a.resultId);
+      a.rows = [...a.rows, ...chunk.rows];
+      a.hasMore = chunk.has_more;
+      a.rowCount = chunk.row_count_so_far;
+      a.durationMs = chunk.duration_ms_so_far;
+      if (!chunk.has_more) a.resultId = "";
     } catch (err) {
+      // The cursor is likely dead; snapshot the pane (keep the rows already
+      // fetched) rather than discarding the result.
+      a.resultId = "";
+      a.hasMore = false;
       reportQueryError(tab, err);
-      tab.active = null;
     } finally {
       tab.loadingMore = false;
     }
     await refreshSlotState(tab.serverId);
   }
 
-  async function closeActive(tab: Tab | null = activeTab) {
-    if (!tab || !tab.active) return;
-    const rid = tab.active.resultId;
-    tab.active = null;
-    tab.lastError = null;
-    if (rid) {
-      try { await api.closeResult(rid); } catch {}
+  // Pin/unpin a pane.  Pinning snapshots it: the server-side cursor and its slot
+  // are released, the already-fetched rows stay on screen as a static result
+  // (resultId cleared, hasMore false) — the same terminal state a cursor reaches
+  // when it runs to completion.  This keeps pinned results from holding a slot,
+  // so the next run reuses the freed budget.
+  async function togglePin(tab: Tab, paneId: number) {
+    const pane = tab.results.find((r) => r.paneId === paneId);
+    if (!pane) return;
+    if (!pane.pinned) {
+      pane.pinned = true;
+      if (pane.resultId) {
+        const rid = pane.resultId;
+        pane.resultId = "";
+        pane.hasMore = false;
+        try { await api.closeResult(rid); } catch {}
+        await refreshSlotState(tab.serverId);
+      }
+    } else {
+      pane.pinned = false;
     }
-    await refreshSlotState(tab.serverId);
   }
 
-  // "Close result" button: release the server-side cursor and its slot but
-  // keep the rows already fetched on screen.  The grid becomes a static
-  // snapshot — the same terminal state a cursor reaches when it runs to
-  // completion (resultId cleared, hasMore false).  Discarding the fetched rows
-  // here was a bug: closing a >1000-row cursor wiped results the user had
-  // already pulled down.
+  function selectResult(tab: Tab, paneId: number) {
+    tab.activeResultId = paneId;
+  }
+
+  // Remove a pane from the strip, releasing its cursor/slot if still live.
+  async function closeResultPane(tab: Tab, paneId: number) {
+    const idx = tab.results.findIndex((r) => r.paneId === paneId);
+    if (idx < 0) return;
+    const pane = tab.results[idx];
+    tab.results.splice(idx, 1);
+    if (tab.activeResultId === paneId) {
+      const next = tab.results[idx] ?? tab.results[idx - 1] ?? null;
+      tab.activeResultId = next ? next.paneId : null;
+    }
+    if (pane.resultId) {
+      try { await api.closeResult(pane.resultId); } catch {}
+      await refreshSlotState(tab.serverId);
+    }
+  }
+
+  // "Close result" button: release the active pane's cursor/slot but keep its
+  // rows on screen as a static snapshot.  Discarding the fetched rows here was a
+  // bug: closing a >1000-row cursor wiped results the user had already pulled
+  // down.
   async function closeResultKeepRows(tab: Tab | null = activeTab) {
-    if (!tab || !tab.active?.resultId) return;
-    const rid = tab.active.resultId;
-    tab.active.resultId = "";
-    tab.active.hasMore = false;
+    const a = tab ? activeResult(tab) : null;
+    if (!tab || !a?.resultId) return;
+    const rid = a.resultId;
+    a.resultId = "";
+    a.hasMore = false;
     try { await api.closeResult(rid); } catch {}
     await refreshSlotState(tab.serverId);
   }
@@ -937,7 +1003,7 @@ import { save } from "@tauri-apps/plugin-dialog";
   }
 
   function statusLineText(tab: Tab): string {
-    const a = tab.active!;
+    const a = activeResult(tab)!;
     const slot = connectedState[tab.serverId];
     const busy = slot ? slot.slots.filter((s) => s.busy).length : 0;
     const budget = slot ? slot.budget : 0;
@@ -959,7 +1025,7 @@ import { save } from "@tauri-apps/plugin-dialog";
     const stamp =
       `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
       `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const partial = tab.active?.hasMore ? ".partial" : "";
+    const partial = activeResult(tab)?.hasMore ? ".partial" : "";
     return `${safe(server)}-${safe(tab.database)}-${stamp}${partial}.csv`;
   }
   function pad(n: number): string {
@@ -967,7 +1033,8 @@ import { save } from "@tauri-apps/plugin-dialog";
   }
 
   async function exportCsv(tab: Tab, sortedRows: unknown[][]) {
-    if (!tab.active) return;
+    const a = activeResult(tab);
+    if (!a) return;
     const filename = csvFilename(tab);
     let target: string | null;
     try {
@@ -982,10 +1049,10 @@ import { save } from "@tauri-apps/plugin-dialog";
     if (!target) return;
 
     const prelude =
-      tab.active.hasMore
-        ? `# Partial export: ${tab.active.rowCount} rows, cursor still open. -- generated by Quill`
+      a.hasMore
+        ? `# Partial export: ${a.rowCount} rows, cursor still open. -- generated by Quill`
         : undefined;
-    const payload = encodeCsv(tab.active.columns, sortedRows, prelude);
+    const payload = encodeCsv(a.columns, sortedRows, prelude);
 
     try {
       await api.writeTextFile(target, payload);
@@ -995,11 +1062,12 @@ import { save } from "@tauri-apps/plugin-dialog";
   }
 
   async function copyCsv(tab: Tab, sortedRows: unknown[][]) {
-    if (!tab.active) return;
-    const prelude = tab.active.hasMore
-      ? `# Partial export: ${tab.active.rowCount} rows, cursor still open. -- generated by Quill`
+    const a = activeResult(tab);
+    if (!a) return;
+    const prelude = a.hasMore
+      ? `# Partial export: ${a.rowCount} rows, cursor still open. -- generated by Quill`
       : undefined;
-    const payload = encodeCsv(tab.active.columns, sortedRows, prelude);
+    const payload = encodeCsv(a.columns, sortedRows, prelude);
     try {
       await navigator.clipboard.writeText(payload);
     } catch (err) {
@@ -1108,10 +1176,10 @@ import { save } from "@tauri-apps/plugin-dialog";
         <button class="btn" onclick={() => runFromEditor(editor?.currentRunPayload() ?? buildPayloadFromButton(tab))} disabled={!canRun(tab)}>
           {tab.runningQuery ? "Running…" : "Run (Ctrl/Cmd+Enter)"}
         </button>
-        <button class="btn" onclick={cancelRunning} disabled={!tab.runningQuery && !tab.active?.resultId}>
+        <button class="btn" onclick={cancelRunning} disabled={!tab.runningQuery && !activeResult(tab)?.resultId}>
           Cancel
         </button>
-        {#if tab.active?.resultId}
+        {#if activeResult(tab)?.resultId}
           <button class="btn" onclick={() => closeResultKeepRows(tab)}>Close result</button>
         {/if}
         <button class="btn" onclick={openSaveDialog} disabled={!tab.sql.trim()}>Save…</button>
@@ -1152,18 +1220,29 @@ import { save } from "@tauri-apps/plugin-dialog";
 
       <Resizer orientation="vertical" onResize={resizeEditor} />
 
-      {#if tab.active}
-        <ResultGrid
-          columns={tab.active.columns}
-          rows={tab.active.rows}
-          statusLine={statusLineText(tab)}
-          hasMore={tab.active.hasMore}
-          loadingMore={tab.loadingMore}
-          onLoadMore={loadMore}
-          canLoadMore={!!tab.active.resultId}
-          onExportCsv={(sorted) => exportCsv(tab, sorted)}
-          onCopyCsv={(sorted) => copyCsv(tab, sorted)}
-        />
+      <ResultTabs
+        panes={tab.results}
+        activeId={tab.activeResultId}
+        onSelect={(id) => selectResult(tab, id)}
+        onClose={(id) => closeResultPane(tab, id)}
+        onTogglePin={(id) => togglePin(tab, id)}
+      />
+
+      {#if activeResult(tab)}
+        {@const a = activeResult(tab)!}
+        {#key a.paneId}
+          <ResultGrid
+            columns={a.columns}
+            rows={a.rows}
+            statusLine={statusLineText(tab)}
+            hasMore={a.hasMore}
+            loadingMore={tab.loadingMore}
+            onLoadMore={loadMore}
+            canLoadMore={!!a.resultId}
+            onExportCsv={(sorted) => exportCsv(tab, sorted)}
+            onCopyCsv={(sorted) => copyCsv(tab, sorted)}
+          />
+        {/key}
       {:else if !tab.runningQuery && !tab.lastError}
         <p class="muted">No active result. Press Run or Ctrl/Cmd+Enter.</p>
       {/if}
