@@ -158,7 +158,7 @@ pub async fn run_query(
     if let Err(e) = guard.batch_execute(&decl_sql).await {
         // Best-effort rollback before bubbling up.
         let _ = guard.batch_execute("ROLLBACK").await;
-        return Err(QueryError::Pg(e.to_string()));
+        return Err(QueryError::Pg(crate::pg::format_pg_error(&e)));
     }
 
     let fetch_sql = format!(r#"FETCH {chunk_size} FROM "{cursor_name}""#);
