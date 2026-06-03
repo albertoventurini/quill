@@ -558,9 +558,34 @@ fn extract_scope_tables(stmt_tokens: &[Atok], cursor: usize) -> Vec<ScopeTable> 
         }
     }
 
-    // Find the FROM clause in the statement at cursor_depth.
-    // Scan the entire statement (not just before cursor) because the FROM
-    // may appear after the cursor position in SELECT-list contexts.
+    // Find the SELECT that governs the cursor: the last top-level (at
+    // cursor_depth) SELECT keyword that starts at or before the cursor. The
+    // buffer may hold several SELECTs with no semicolon between them (which
+    // would otherwise share one statement window), so anchoring to the
+    // governing SELECT keeps scope extraction confined to the cursor's query.
+    let mut select_idx: Option<usize> = None;
+    let mut depth: i32 = 0;
+    for (i, t) in stmt_tokens.iter().enumerate() {
+        match &t.token {
+            Token::LParen => depth += 1,
+            Token::RParen if depth > 0 => {
+                depth -= 1;
+            }
+            Token::Word(w)
+                if depth == cursor_depth
+                    && w.keyword == sqlparser::keywords::Keyword::SELECT
+                    && t.start <= cursor =>
+            {
+                select_idx = Some(i);
+            }
+            _ => {}
+        }
+    }
+
+    // Find the FROM clause belonging to the governing SELECT. Scan past the
+    // cursor (the FROM may sit after it in SELECT-list contexts), but stop at
+    // the next SELECT at cursor_depth: hitting it first means this query has no
+    // FROM, and we must not borrow the following query's FROM.
     let mut from_idx: Option<usize> = None;
     let mut depth: i32 = 0;
     for (i, t) in stmt_tokens.iter().enumerate() {
@@ -569,8 +594,18 @@ fn extract_scope_tables(stmt_tokens: &[Atok], cursor: usize) -> Vec<ScopeTable> 
             Token::RParen if depth > 0 => {
                 depth -= 1;
             }
-            Token::Word(w) if depth == cursor_depth && is_from_keyword(w) => {
-                from_idx.get_or_insert(i);
+            Token::Word(w) if depth == cursor_depth => {
+                let after_governing = select_idx.is_none_or(|s| i > s);
+                if !after_governing {
+                    continue;
+                }
+                if w.keyword == sqlparser::keywords::Keyword::SELECT {
+                    break;
+                }
+                if is_from_keyword(w) {
+                    from_idx = Some(i);
+                    break;
+                }
             }
             _ => {}
         }
@@ -1157,5 +1192,72 @@ mod tests {
         assert_eq!(c.kind, CompletionKind::Unqualified);
         assert_eq!(c.prefix, "");
         assert!(c.scope_tables.is_empty());
+    }
+
+    #[test]
+    fn scope_ignores_prior_unterminated_select() {
+        // No semicolon between the two SELECTs: both live in one statement
+        // window. Scope must come from the cursor's query, not the first FROM.
+        let c = ctx(
+            "SELECT * FROM users u\n\
+             SELECT * from trust_status ts \
+             LEFT JOIN tiko_connector tc on ts.uuid = tc.|",
+        );
+        assert_eq!(c.kind, CompletionKind::QualifiedColumn);
+        assert_eq!(c.qualifier.as_deref(), Some("tc"));
+        assert_eq!(
+            c.scope_tables,
+            vec![
+                ScopeTable {
+                    schema: None,
+                    name: "trust_status".into(),
+                    alias: Some("ts".into())
+                },
+                ScopeTable {
+                    schema: None,
+                    name: "tiko_connector".into(),
+                    alias: Some("tc".into())
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn scope_for_first_of_two_unterminated_selects() {
+        let c = ctx("SELECT a| FROM t1\nSELECT b FROM t2");
+        assert_eq!(
+            c.scope_tables,
+            vec![ScopeTable {
+                schema: None,
+                name: "t1".into(),
+                alias: None
+            }],
+        );
+    }
+
+    #[test]
+    fn single_select_scope_unchanged() {
+        let c = ctx("SELECT col| FROM orders o WHERE o.id = 1");
+        assert_eq!(
+            c.scope_tables,
+            vec![ScopeTable {
+                schema: None,
+                name: "orders".into(),
+                alias: Some("o".into())
+            }],
+        );
+    }
+
+    #[test]
+    fn union_second_branch_scope() {
+        let c = ctx("SELECT a FROM t1 UNION SELECT b| FROM t2");
+        assert_eq!(
+            c.scope_tables,
+            vec![ScopeTable {
+                schema: None,
+                name: "t2".into(),
+                alias: None
+            }],
+        );
     }
 }
