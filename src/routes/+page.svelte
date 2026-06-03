@@ -1105,7 +1105,7 @@ import { save } from "@tauri-apps/plugin-dialog";
       {/key}
 
       <div class="action-row">
-        <button class="btn" onclick={() => runFromEditor(buildPayloadFromButton(tab))} disabled={!canRun(tab)}>
+        <button class="btn" onclick={() => runFromEditor(editor?.currentRunPayload() ?? buildPayloadFromButton(tab))} disabled={!canRun(tab)}>
           {tab.runningQuery ? "Running…" : "Run (Ctrl/Cmd+Enter)"}
         </button>
         <button class="btn" onclick={cancelRunning} disabled={!tab.runningQuery && !tab.active?.resultId}>

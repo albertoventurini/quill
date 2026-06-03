@@ -93,7 +93,20 @@
     return getEffectiveTheme() === "dark" ? darkHighlightStyle : defaultHighlightStyle;
   }
 
+  function pickFrom(v: EditorView) {
+    const doc = v.state.doc.toString();
+    const cursor = v.state.selection.main.head;
+    const sel = v.state.selection.main;
+    return statementAtCursor(doc, cursor, { from: sel.from, to: sel.to });
+  }
+
   // Public-ish imperative methods. The parent gets a reference via bind:this.
+
+  // The statement the Run button should execute: the live selection if there
+  // is one, otherwise the statement at the cursor — same result as Ctrl+Enter.
+  export function currentRunPayload() {
+    return view ? pickFrom(view) : null;
+  }
   export function setDoc(next: string) {
     if (!view) return;
     if (view.state.doc.toString() === next) return;
@@ -143,13 +156,7 @@
             key: "Mod-Enter",
             preventDefault: true,
             run: (v) => {
-              const doc = v.state.doc.toString();
-              const cursor = v.state.selection.main.head;
-              const sel = v.state.selection.main;
-              const picked = statementAtCursor(doc, cursor, {
-                from: sel.from,
-                to: sel.to,
-              });
+              const picked = pickFrom(v);
               if (picked && picked.text.length > 0) {
                 onRun(picked);
               }
