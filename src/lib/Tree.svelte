@@ -256,7 +256,15 @@
     color: var(--text-mid);
     font-size: 0.85rem;
   }
-  .label { flex: 1; min-width: 0; }
+  .label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* Column name yields width to the type tag, truncating with an ellipsis
+     rather than wrapping under it when the pane is narrow. */
   .label.col-name { flex: 0 1 auto; }
 
   /* Per-kind label styling builds a visual hierarchy so structural
@@ -282,11 +290,16 @@
     color: var(--text-faint);
   }
   .coltype {
+    flex: 0 0 auto;
+    margin-left: auto;
+    white-space: nowrap;
     font-size: 0.8rem;
     color: var(--text-mid);
     font-variant-numeric: tabular-nums;
   }
   .notnull {
+    flex: 0 0 auto;
+    white-space: nowrap;
     font-size: 0.7rem;
     color: var(--text-muted);
     font-style: italic;
