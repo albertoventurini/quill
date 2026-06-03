@@ -5,3 +5,9 @@ allowBuilds:
 # 7 days (10080 minutes) ago. Skips the window in which a hijacked release is live
 # before being detected and yanked. Tune via minimumReleaseAgeExclude if needed.
 minimumReleaseAge: 10080
+
+# Force the patched cookie. SvelteKit (dev-only) pulls cookie 0.6.0, vulnerable
+# to GHSA-pxg6-pf52-xh8x; the 0.7.x line is API-compatible. Remove once
+# @sveltejs/kit ships a release depending on cookie >= 0.7.0.
+overrides:
+  cookie@<0.7.0: ^0.7.0

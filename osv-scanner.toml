@@ -1,0 +1,11 @@
+# Suppressions for osv-scanner (CI: .github/workflows/test.yml).
+# Each entry must document *why* it is safe to ignore. Revisit on every bump.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+# rsa (Marvin attack). Pulled only by sqlx-mysql, an *optional* dependency of the
+# sqlx facade crate that we never enable (our sqlx uses the sqlite feature only).
+# It is pinned in Cargo.lock but never compiled into the binary, so there is no
+# runtime exposure. No fixed version exists upstream. Verified: `cargo tree -i rsa`
+# returns nothing. Drop this entry if we ever remove the sqlx dependency.
+reason = "rsa via unused optional sqlx-mysql; not compiled into the binary, no fix available"
