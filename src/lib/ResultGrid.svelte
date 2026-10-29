@@ -4,6 +4,8 @@
   //! Owns its own sort state and column widths; the materialized row
   //! buffer is passed in by the parent (which appends on Load more).
 
+  import { untrack } from "svelte";
+  import { encodeTextTable } from "./textTable";
   import type { ColumnMeta } from "$lib/tauri";
 
   let {
@@ -16,6 +18,7 @@
     canLoadMore,
     onExportCsv,
     onCopyCsv,
+    onCopyText,
   }: {
     columns: ColumnMeta[];
     rows: unknown[][];
@@ -26,6 +29,7 @@
     canLoadMore: boolean;
     onExportCsv: (sortedRows: unknown[][]) => void;
     onCopyCsv: (sortedRows: unknown[][]) => void;
+    onCopyText: (text: string) => Promise<void>;
   } = $props();
 
   // ── Sort state (single-column tri-state: asc / desc / none) ──
@@ -126,7 +130,38 @@
 
   let selectedCell = $state<{ row: unknown[]; colIdx: number } | null>(null);
 
-  // Clear selection when the result set changes.
+  let selectedRows = $state<Set<unknown[]>>(new Set());
+  let anchor = $state<unknown[] | null>(null);
+  let grid: HTMLDivElement;
+  function selectAll() {
+    selectedCell = null;
+    selectedRows = new Set(rows);
+    anchor = sortedRows[0] ?? null;
+    grid.focus();
+  }
+  function selectRow(row: unknown[], e: MouseEvent) {
+    selectedCell = null;
+    const next = e.ctrlKey || e.metaKey ? new Set(selectedRows) : new Set<unknown[]>();
+    if (e.shiftKey && anchor && sortedRows.includes(anchor)) {
+      const a = sortedRows.indexOf(anchor), b = sortedRows.indexOf(row);
+      for (const item of sortedRows.slice(Math.min(a,b), Math.max(a,b)+1)) next.add(item);
+    } else {
+      if (next.has(row)) next.delete(row); else next.add(row);
+      anchor = row;
+    }
+    selectedRows = next;
+    grid.focus();
+  }
+  function copySelected() {
+    closeGridMenu();
+    if (selectedRows.size) void onCopyText(encodeTextTable(columns, sortedRows.filter(r => selectedRows.has(r))));
+  }
+  $effect(() => {
+    const available = new Set(rows);
+    selectedRows = new Set([...untrack(() => selectedRows)].filter(r => available.has(r)));
+  });
+
+  // Clear cell selection when the result set changes.
   $effect(() => { rows; selectedCell = null; });
 
   function openPreview(value: unknown) {
@@ -177,13 +212,17 @@
   }
 </script>
 
-<div class="status-line">{statusLine}</div>
+<div class="status-line">{statusLine} · {selectedRows.size} of {rows.length} loaded rows selected{#if hasMore} · More rows available; selection includes loaded rows only.{/if}</div>
 
 <!-- svelte-ignore a11y_no_static_element_interactions a11y_no_noninteractive_tabindex -->
 <div
   class="grid-scroll"
+  bind:this={grid}
   oncontextmenu={openGridMenu}
   onkeydown={(e) => {
+    if (e.key === "Escape") { selectedRows = new Set(); selectedCell = null; anchor = null; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a") { e.preventDefault(); selectAll(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && selectedRows.size) { e.preventDefault(); copySelected(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key === "c" && selectedCell) {
       e.preventDefault();
       const val = selectedCell.row[selectedCell.colIdx];
@@ -195,7 +234,7 @@
   <table>
     <thead>
       <tr>
-        <th class="rownum-header" style="width:2em;min-width:2em;max-width:2em"></th>
+        <th class="rownum-header" style="width:2em;min-width:2em;max-width:2em"><button title="Select all loaded rows" aria-label="Select all loaded rows" onclick={selectAll}>✓</button></th>
         {#each columns as col, i (i)}
           <th style={widths[i] != null ? `width:${widths[i]}px` : ""}>
             <button
@@ -221,8 +260,8 @@
     </thead>
     <tbody>
       {#each sortedRows as row, rowIdx (row)}
-        <tr>
-          <td class="rownum" style="width:2em;min-width:2em;max-width:2em;padding:0.25rem 0.15rem">{rowIdx + 1}</td>
+        <tr class:row-selected={selectedRows.has(row)}>
+          <td class="rownum" style="width:2em;min-width:2em;max-width:2em;padding:0.25rem 0.15rem"><button aria-label={`Select row ${rowIdx + 1}`} aria-pressed={selectedRows.has(row)} onclick={(e) => selectRow(row, e)}>{rowIdx + 1}</button></td>
           {#each columns as _, i (i)}
             {@const v = row[i]}
             <td
@@ -231,6 +270,9 @@
               class:previewable={shouldPreview(v)}
               class:selected={selectedCell?.row === row && selectedCell?.colIdx === i}
               onclick={() => {
+                selectedRows = new Set();
+                anchor = null;
+                grid.focus();
                 selectedCell = { row, colIdx: i };
                 if (shouldPreview(v)) openPreview(v);
               }}
@@ -252,6 +294,8 @@
     onclick={(e) => e.stopPropagation()}
     oncontextmenu={(e) => e.preventDefault()}
   >
+    <li><button class="menu-item" disabled={!selectedRows.size} onclick={copySelected}>Copy selected rows as text</button></li>
+    <li><button class="menu-item" onclick={() => { closeGridMenu(); selectAll(); }}>Select all loaded rows</button></li>
     <li><button class="menu-item" onclick={exportAction}>Export CSV…</button></li>
     <li><button class="menu-item" onclick={copyAction}>Copy as CSV</button></li>
   </ul>
@@ -275,6 +319,9 @@
 <svelte:window onclick={closeGridMenu} />
 
 <style>
+  tbody tr.row-selected td { background: var(--bg-selected-cell); }
+  .rownum button { background: transparent; color: inherit; border: 0; cursor: pointer; }
+  .menu-item:disabled { opacity: 0.5; }
   .status-line {
     padding: 0.4rem 0.6rem;
     font-size: 0.85rem;

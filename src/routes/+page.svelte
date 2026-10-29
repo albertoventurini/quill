@@ -1240,6 +1240,10 @@ import { save } from "@tauri-apps/plugin-dialog";
             onLoadMore={loadMore}
             canLoadMore={!!a.resultId}
             onExportCsv={(sorted) => exportCsv(tab, sorted)}
+            onCopyText={async (text) => {
+              try { await navigator.clipboard.writeText(text); }
+              catch (err) { tab.lastError = { kind: "Pg", message: `clipboard write failed: ${err}` }; }
+            }}
             onCopyCsv={(sorted) => copyCsv(tab, sorted)}
           />
         {/key}
