@@ -52,3 +52,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 
+[patch.crates-io]
+# GTK3 requires glib 0.18; backport RUSTSEC-2024-0429 until Tauri leaves GTK3.
+glib = { path = "vendor/glib" }
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+glib = "0.18"
+
+# The GLib pointer bug can disappear in debug builds; test its optimized code.
+[profile.dev.package.glib]
+opt-level = 3
+

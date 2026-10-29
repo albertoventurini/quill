@@ -11,3 +11,5 @@ minimumReleaseAge: 10080
 # @sveltejs/kit ships a release depending on cookie >= 0.7.0.
 overrides:
   cookie@<0.7.0: ^0.7.0
+  # SvelteKit 2 pins devalue; use the compatible security fix until it updates.
+  devalue@<5.9.3: ^5.9.3

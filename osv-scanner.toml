@@ -9,3 +9,79 @@ id = "RUSTSEC-2023-0071"
 # runtime exposure. No fixed version exists upstream. Verified: `cargo tree -i rsa`
 # returns nothing. Drop this entry if we ever remove the sqlx dependency.
 reason = "rsa via unused optional sqlx-mysql; not compiled into the binary, no fix available"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0235"
+reason = "rkyv is an unenabled optional rust_decimal dependency; cargo tree --target all -i rkyv is empty. Revisit if rust_decimal's rkyv features are enabled."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0429"
+reason = "Fixed in src-tauri/vendor/glib by backporting gtk-rs/gtk-rs-core#1343. Root Cargo patch replaces every glib 0.18 consumer; tests/glib_variant_iter.rs exercises all affected methods with optimized GLib. Remove with the backport."
+
+[[IgnoredVulns]]
+id = "GHSA-qwgh-2vcv-g2f7"
+ignoreUntil = 2026-12-01
+reason = "Stale OSV range: upstream RustCrypto advisory limits affected versions to >=0.11.0,<0.12.1. Our copies are unaffected 0.10.4 and patched 0.12.1. https://github.com/RustCrypto/utils/security/advisories/GHSA-qwgh-2vcv-g2f7"
+
+# Maintenance notices in transitive dependencies. Match cargo-deny's
+# unmaintained = 'workspace' policy; these are not vulnerability exceptions.
+# Revisit on the next Tauri/keyring upgrade, or at the quarterly expiry.
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370"
+ignoreUntil = 2027-01-31
+reason = "Unmaintained proc-macro-error used by GTK3's glib-macros at build time; no security vulnerability is reported. Remove when Tauri leaves GTK3."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0081"
+ignoreUntil = 2027-01-31
+reason = "Unmaintained unic-char-property via Tauri's urlpattern; no security vulnerability is reported. Await upstream replacement."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0075"
+ignoreUntil = 2027-01-31
+reason = "Unmaintained unic-char-range via Tauri's urlpattern; no security vulnerability is reported. Await upstream replacement."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0080"
+ignoreUntil = 2027-01-31
+reason = "Unmaintained unic-common via Tauri's urlpattern; no security vulnerability is reported. Await upstream replacement."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0100"
+ignoreUntil = 2027-01-31
+reason = "Unmaintained unic-ucd-ident via Tauri's urlpattern; no security vulnerability is reported. Await upstream replacement."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0098"
+ignoreUntil = 2027-01-31
+reason = "Unmaintained unic-ucd-version via Tauri's urlpattern; no security vulnerability is reported. Await upstream replacement."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0371"
+ignoreUntil = 2027-01-31
+reason = "zbus_names merged into zbus 6; maintenance notice only, pulled by Tauri/keyring's D-Bus integrations. Await upstream migration."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0370"
+ignoreUntil = 2027-01-31
+reason = "zvariant merged into zbus 6; maintenance notice only, pulled by Tauri/keyring's D-Bus integrations. Await upstream migration."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0372"
+ignoreUntil = 2027-01-31
+reason = "zvariant_derive merged into zbus 6; maintenance notice only, pulled by Tauri/keyring's D-Bus integrations. Await upstream migration."
+
+[[IgnoredVulns]]
+id = "GHSA-27mw-82g8-phjj"
+ignoreUntil = 2027-01-31
+reason = "Quill uses adapter-static with ssr=false (src/routes/+layout.ts), and never calls setHeaders or forwards cache-control values into prerendered HTML. Revisit before adding prerendered pages or header forwarding."
+
+[[IgnoredVulns]]
+id = "GHSA-pfhg-q3qv-9q6r"
+ignoreUntil = 2027-01-31
+reason = "Quill is a static Tauri SPA with no SvelteKit server, form actions, use:enhance, or catch-all routes. The enhanced server-action redirect path is absent. Revisit before adding any such features."
+
+[[IgnoredVulns]]
+id = "GHSA-gcqx-w48m-w2h4"
+ignoreUntil = 2027-01-31
+reason = "deepmerge is used only by vite-plugin-svelte to merge trusted local build configuration (src/utils/options.js:mergeConfigs); no untrusted merge input or runtime dependency. Revisit if build config accepts external data."
