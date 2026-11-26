@@ -3,9 +3,10 @@
   //!
   //! Reads the cached `SchemaPayload` (no extra DB round-trip when the schema
   //! has already been introspected), lays the visible relations out with
-  //! dagre, and hand-draws table boxes + foreign-key edges in SVG.  Pan with a
-  //! background drag, zoom with the wheel.  A side list toggles which tables
-  //! are shown and whether 1-hop FK neighbours are pulled in automatically.
+  //! dagre, and hand-draws table boxes + foreign-key edges in SVG.  Drag a table
+  //! to move it, drag the background to pan, zoom with the wheel.  A side
+  //! list toggles which tables are shown and whether 1-hop FK
+  //! neighbours are pulled in automatically.
 
   import dagre from "@dagrejs/dagre";
   import { getSchemaPayload } from "./schemaStore";
@@ -136,7 +137,8 @@
   type Placed = { rel: RelationInfo; x: number; y: number; width: number; height: number };
 
   // ── Layout (dagre) ─────────────────────────────────────────────────────
-  let layout = $derived.by(() => {
+  /** Automatic top-left positions from dagre, before any manual moves. */
+  let autoLayout = $derived.by(() => {
     const visRels = relations.filter((r) => visibleNames.has(r.name));
     const g = new dagre.graphlib.Graph();
     g.setGraph({ rankdir: "LR", nodesep: 40, ranksep: 90, marginx: 24, marginy: 24 });
@@ -157,34 +159,61 @@
       // dagre reports box centres; convert to top-left for SVG.
       nodes.push({ rel, x: n.x - n.width / 2, y: n.y - n.height / 2, width: n.width, height: n.height });
     }
-    const placed = new Map(nodes.map((n) => [n.rel.name, n]));
+    return nodes;
+  });
 
-    const paths: { d: string; label: string }[] = [];
+  /** Manual positions for tables the user has dragged, keyed by table name.
+   *  Kept across selection changes so a moved table stays put. */
+  let manualPos = $state<Record<string, { x: number; y: number }>>({});
+
+  let nodes = $derived(
+    autoLayout.map((n) => {
+      const m = manualPos[n.rel.name];
+      return m ? { ...n, x: m.x, y: m.y } : n;
+    }),
+  );
+
+  /** FK edges drawn as cubic curves between the nearest vertical sides of the
+   *  two boxes.  dagre's routed points are ignored because they go stale as
+   *  soon as a table is moved by hand. */
+  let paths = $derived.by(() => {
+    const placed = new Map(nodes.map((n) => [n.rel.name, n]));
+    const out: { d: string; label: string }[] = [];
     for (const e of edges) {
-      if (e.from === e.to) {
-        // Self-reference: small loop off the node's right edge.
-        const n = placed.get(e.from);
-        if (!n) continue;
-        const x = n.x + n.width;
-        const y = n.y + n.height / 2;
-        paths.push({
-          d: `M ${x} ${y - 8} C ${x + 40} ${y - 24}, ${x + 40} ${y + 24}, ${x} ${y + 8}`,
+      const a = placed.get(e.from);
+      const b = placed.get(e.to);
+      if (!a || !b) continue;
+      const y1 = a.y + a.height / 2;
+      const y2 = b.y + b.height / 2;
+      if (a === b) {
+        const x = a.x + a.width;
+        out.push({
+          d: `M ${x} ${y1 - 8} C ${x + 40} ${y1 - 24}, ${x + 40} ${y1 + 24}, ${x} ${y1 + 8}`,
           label: e.label,
         });
         continue;
       }
-      const ge = g.edge(e.from, e.to);
-      if (ge && ge.points && ge.points.length) {
-        const pts = ge.points as { x: number; y: number }[];
-        const d =
-          `M ${pts[0].x} ${pts[0].y} ` +
-          pts.slice(1).map((p) => `L ${p.x} ${p.y}`).join(" ");
-        paths.push({ d, label: e.label });
+      let d: string;
+      if (b.x >= a.x + a.width) {
+        const x1 = a.x + a.width;
+        const x2 = b.x;
+        const dx = Math.max(40, (x2 - x1) / 2);
+        d = `M ${x1} ${y1} C ${x1 + dx} ${y1}, ${x2 - dx} ${y2}, ${x2} ${y2}`;
+      } else if (b.x + b.width <= a.x) {
+        const x1 = a.x;
+        const x2 = b.x + b.width;
+        const dx = Math.max(40, (x1 - x2) / 2);
+        d = `M ${x1} ${y1} C ${x1 - dx} ${y1}, ${x2 + dx} ${y2}, ${x2} ${y2}`;
+      } else {
+        // Horizontally overlapping (stacked): loop out from both right sides.
+        const x1 = a.x + a.width;
+        const x2 = b.x + b.width;
+        const xc = Math.max(x1, x2) + 50;
+        d = `M ${x1} ${y1} C ${xc} ${y1}, ${xc} ${y2}, ${x2} ${y2}`;
       }
+      out.push({ d, label: e.label });
     }
-
-    const gi = g.graph();
-    return { nodes, paths, width: gi.width ?? 0, height: gi.height ?? 0 };
+    return out;
   });
 
   /** FK column names per relation, for the column-row marker. */
@@ -237,6 +266,44 @@
     panY = 24;
   }
 
+  // ── Table drag ─────────────────────────────────────────────────────────
+  let draggedNode = $state<string | null>(null);
+  let nodeDragStart = { x: 0, y: 0, nodeX: 0, nodeY: 0 };
+
+  function onNodePointerDown(e: PointerEvent, n: Placed) {
+    if (e.button !== 0) return;
+    // Keep the background pan handler from also starting.
+    e.stopPropagation();
+    draggedNode = n.rel.name;
+    nodeDragStart = { x: e.clientX, y: e.clientY, nodeX: n.x, nodeY: n.y };
+    (e.currentTarget as SVGElement).setPointerCapture(e.pointerId);
+  }
+  function onNodePointerMove(e: PointerEvent) {
+    if (draggedNode === null) return;
+    e.stopPropagation();
+    manualPos[draggedNode] = {
+      x: nodeDragStart.nodeX + (e.clientX - nodeDragStart.x) / zoom,
+      y: nodeDragStart.nodeY + (e.clientY - nodeDragStart.y) / zoom,
+    };
+  }
+  function onNodePointerUp(e: PointerEvent) {
+    if (draggedNode === null) return;
+    e.stopPropagation();
+    draggedNode = null;
+    (e.currentTarget as SVGElement).releasePointerCapture?.(e.pointerId);
+  }
+
+  function relayout() {
+    manualPos = {};
+  }
+
+  /** The dragged table is drawn last so it stays above the others. */
+  let drawOrder = $derived(
+    draggedNode === null
+      ? nodes
+      : [...nodes.filter((n) => n.rel.name !== draggedNode), ...nodes.filter((n) => n.rel.name === draggedNode)],
+  );
+
   function toggleTable(name: string) {
     selected = selectedSet.has(name)
       ? selected.filter((n) => n !== name)
@@ -264,6 +331,12 @@
       <button class="btn-sm" onclick={selectAll}>All</button>
       <button class="btn-sm" onclick={clearAll}>None</button>
       <button class="btn-sm" onclick={resetView}>Reset view</button>
+      <button
+        class="btn-sm"
+        onclick={relayout}
+        disabled={Object.keys(manualPos).length === 0}
+        title="Discard manual table positions">Re-layout</button
+      >
     </div>
     <div class="table-list">
       {#each relations as rel (rel.name)}
@@ -317,12 +390,21 @@
           </marker>
         </defs>
         <g transform="translate({panX} {panY}) scale({zoom})">
-          {#each layout.paths as p (p.d)}
+          {#each paths as p}
             <path class="edge" d={p.d} marker-end="url(#erd-arrow)" />
           {/each}
-          {#each layout.nodes as n (n.rel.name)}
+          {#each drawOrder as n (n.rel.name)}
             {@const fkCols = fkColumns(n.rel)}
-            <g class="node" transform="translate({n.x} {n.y})">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <g
+              class="node"
+              class:moving={draggedNode === n.rel.name}
+              transform="translate({n.x} {n.y})"
+              onpointerdown={(e) => onNodePointerDown(e, n)}
+              onpointermove={onNodePointerMove}
+              onpointerup={onNodePointerUp}
+              onpointercancel={onNodePointerUp}
+            >
               <rect class="box" width={n.width} height={n.height} rx="5" />
               <rect class="header" width={n.width} height={HEADER_H} rx="5" />
               <rect class="header-foot" y={HEADER_H - 6} width={n.width} height="6" />
@@ -371,7 +453,10 @@
   .panel-head { display: flex; justify-content: space-between; align-items: baseline; }
   .muted { color: var(--text-muted); font-size: 0.75rem; }
   .opt { display: flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; }
-  .panel-actions { display: flex; gap: 0.25rem; }
+  .panel-actions { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+  .btn-sm:disabled { opacity: 0.5; cursor: default; }
+  .node { cursor: move; user-select: none; }
+  .node.moving .box { stroke: var(--text-accent); stroke-width: 1.5; }
   .btn-sm {
     flex: 1;
     padding: 0.15rem 0.3rem;
